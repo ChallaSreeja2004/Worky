@@ -21,6 +21,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth.router import router as auth_router
 from app.config.settings import get_settings
 
 settings = get_settings()
@@ -70,9 +71,8 @@ app.add_middleware(
 # Routers — mount as each layer is implemented
 # ---------------------------------------------------------------------------
 
-# [TODO — Auth layer]
-# from app.auth.router import router as auth_router
-# app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["Authentication"])
+# Auth layer — Phase 2
+app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["Authentication"])
 
 # [TODO — Outlook connector]
 # from app.connectors.outlook.router import router as outlook_router
