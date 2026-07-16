@@ -117,6 +117,10 @@ class OutlookSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # The shared .env also contains AppSettings variables (TOKEN_ENCRYPTION_KEY,
+        # LOG_LEVEL, etc.) and future connector variables.  Ignore anything that is
+        # not declared on this class so pydantic-settings does not raise on them.
+        extra="ignore",
     )
 
 
