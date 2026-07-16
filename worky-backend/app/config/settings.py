@@ -74,6 +74,10 @@ class AppSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Connector-specific variables (OUTLOOK_*, SLACK_*, etc.) live in each
+        # connector's own settings class.  Ignore them here so AppSettings does
+        # not raise ValidationError when the shared .env contains those keys.
+        extra="ignore",
     )
 
 
