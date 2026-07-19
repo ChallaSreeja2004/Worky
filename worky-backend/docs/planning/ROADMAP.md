@@ -1,6 +1,6 @@
 # Worky — Implementation Roadmap
 
-> **Last updated:** Phase 1 complete
+> **Last updated:** Phase 4 complete — v0.4.0
 > **Format:** Each phase has an objective, deliverables, dependencies, implementation details, completion criteria, suggested commit, Git tag, and repository state after completion.
 > **Daily tracker:** Use [`../IMPLEMENTATION_CHECKLIST.md`](../IMPLEMENTATION_CHECKLIST.md) to track phase progress and check off tasks.
 
@@ -11,10 +11,10 @@
 | Phase | Name | Owner | Git Tag | Status |
 |---|---|---|---|---|
 | [Phase 1](#phase-1--project-foundation) | Project Foundation | Team | `v0.1.0` | ✅ Complete |
-| [Phase 2](#phase-2--outlook-authentication) | Outlook Authentication | Outlook Dev | `v0.2.0` | 🔄 In Progress |
-| [Phase 3](#phase-3--microsoft-graph-client) | Microsoft Graph Client | Outlook Dev | `v0.3.0` | 📋 Planned |
-| [Phase 4](#phase-4--calendar-fetcher) | Calendar Fetcher | Outlook Dev | (→ v0.4.0) | 📋 Planned |
-| [Phase 5](#phase-5--email-fetcher) | Email Fetcher | Outlook Dev | `v0.4.0` | 📋 Planned |
+| [Phase 2](#phase-2--outlook-authentication) | Outlook Authentication | Outlook Dev | `v0.2.0` | ✅ Complete |
+| [Phase 3](#phase-3--microsoft-graph-client) | Microsoft Graph Client | Outlook Dev | `v0.3.0` | ✅ Complete |
+| [Phase 4](#phase-4--calendar-fetcher) | Calendar Fetcher | Outlook Dev | `v0.4.0` | ✅ Complete |
+| [Phase 5](#phase-5--email-fetcher) | Email Fetcher | Outlook Dev | (→ v0.5.0) | 🔜 Next |
 | [Phase 6](#phase-6--normalizer) | Normalizer | Outlook Dev | (→ v0.5.0) | 📋 Planned |
 | [Phase 7](#phase-7--outlook-connector) | Outlook Connector | Outlook Dev | `v0.5.0` | 📋 Planned |
 | [Phase 8](#phase-8--slack-connector) | Slack Connector | Slack Dev | `v0.6.0` | 📋 Planned |
@@ -156,46 +156,51 @@ A fully tested HTTP client that fetchers can accept as a constructor parameter, 
 
 ## Phase 4 — Calendar Fetcher
 
-**Status:** 📋 Planned | **Owner:** Outlook Developer | **Git Tag:** (bundled into v0.4.0)
+**Status:** ✅ Complete | **Owner:** Outlook Developer | **Git Tag:** `v0.4.0`
 
-**Suggested Commit:** `feat(outlook): add CalendarFetcher for today's events`
+**Commit:** `feat(outlook): add CalendarFetcher for today's events`
 
 ### Objective
 Implement `CalendarFetcher` — fetches today's calendar events from Microsoft Graph.
 
 ### Deliverables
 
-| Deliverable | File |
-|---|---|
-| `CalendarFetcher` | `app/connectors/outlook/fetchers/calendar.py` |
-| Unit tests — standard events | `tests/connectors/outlook/test_calendar_fetcher.py` |
-| Unit tests — empty calendar | |
-| Unit tests — API error handling | |
-| Fixture: sample Graph calendar response | `tests/connectors/outlook/fixtures/calendar_events.json` |
+| Deliverable | File | Status |
+|---|---|---|
+| `CalendarFetcher` | `app/connectors/outlook/fetchers/calendar.py` | ✅ |
+| Fetchers package | `app/connectors/outlook/fetchers/__init__.py` | ✅ |
+| Unit tests — standard events | `tests/connectors/outlook/test_calendar_fetcher.py` | ✅ |
+| Unit tests — empty calendar | `tests/connectors/outlook/test_calendar_fetcher.py` | ✅ |
+| Unit tests — missing value key | `tests/connectors/outlook/test_calendar_fetcher.py` | ✅ |
+| Unit tests — all GraphError propagation | `tests/connectors/outlook/test_calendar_fetcher.py` | ✅ |
 
 ### Implementation Details
 
-- Fetch events for current day using `calendarView` endpoint
-- `$select=subject,start,end,location,organizer,attendees,isOnlineMeeting,onlineMeeting,bodyPreview`
-- `$orderby=start/dateTime asc`, `$top=20`
-- Return raw list of event dictionaries
+- Accepts `GraphAPIClient` via constructor injection
+- Calls `GraphAPIClient.get_calendar_events()` — no direct HTTP
+- Returns `response.get("value", [])` — raw list, no transformation
+- Empty calendar or absent `value` key → returns `[]`
+- All `GraphError` subclasses propagate to caller without catching
 
 ### Dependencies
 Phase 3 — `GraphAPIClient`
 
 ### Repository State After Completion
-`CalendarFetcher` returns raw event dicts. Empty calendar returns `[]`. All tests pass with a mock `GraphAPIClient`.
+`CalendarFetcher` returns raw event dicts. Empty calendar returns `[]`. 12 tests pass (89 total). No real HTTP calls in tests.
 
 ### Completion Criteria
-- `test_fetch_returns_events_list()` passes
-- `test_fetch_returns_empty_list_when_no_events()` passes
-- No real HTTP calls in tests
+- ✅ `test_returns_raw_event_list` passes
+- ✅ `test_empty_value_list_returns_empty_list` passes
+- ✅ `test_missing_value_key_returns_empty_list` passes
+- ✅ `GraphAuthError`, `GraphRateLimitError`, `GraphServiceError` all propagate
+- ✅ No real HTTP calls in tests
+- ✅ Engineering review: APPROVED
 
 ---
 
 ## Phase 5 — Email Fetcher
 
-**Status:** 📋 Planned | **Owner:** Outlook Developer | **Git Tag:** `v0.4.0`
+**Status:** 🔜 Next | **Owner:** Outlook Developer | **Git Tag:** (→ v0.5.0)
 
 **Suggested Commit:** `feat(outlook): add EmailFetcher for unread and high-importance messages`
 

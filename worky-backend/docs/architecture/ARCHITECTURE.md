@@ -198,6 +198,32 @@ app/connectors/<name>/
 
 **Every new connector follows this identical structure.** See [`../development/CONNECTOR_GUIDE.md`](../development/CONNECTOR_GUIDE.md) for step-by-step instructions and [`../templates/CONNECTOR_TEMPLATE.md`](../templates/CONNECTOR_TEMPLATE.md) for the copy-paste blueprint.
 
+### Outlook Connector — Current Build State (v0.4.0)
+
+The Outlook connector is being built incrementally one layer at a time. The data flow as of Phase 4:
+
+```
+Microsoft Graph API  (external)
+        │  HTTP — GET /me/calendarView
+        ▼
+GraphAPIClient                     app/connectors/outlook/graph_client.py
+  • Attaches Bearer token
+  • Retries on 429 / 503 (1 s → 2 s → raise)
+  • Returns raw Graph JSON envelope
+        │  dict[str, Any]  {"value": [...], "@odata.context": "..."}
+        ▼
+CalendarFetcher                    app/connectors/outlook/fetchers/calendar.py
+  • Extracts response["value"]
+  • Returns [] for empty or missing key
+  • Does NOT catch exceptions — propagates GraphError upward
+        │  list[dict[str, Any]]   raw Graph event objects
+        ▼
+  (OutlookNormalizer — Phase 6)    ← not yet built
+  (OutlookConnector  — Phase 7)    ← not yet built
+```
+
+Layers not yet built (`OutlookNormalizer`, `OutlookConnector`) are placeholders. The `CalendarFetcher` layer is complete and tested (12 tests, 89 total).
+
 ### Connector boundaries
 
 | Connector must | Connector must not |

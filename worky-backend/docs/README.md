@@ -183,58 +183,65 @@ worky-backend/
 │
 ├── main.py                          # FastAPI application entry point
 ├── requirements.txt                 # Python dependencies
+├── pytest.ini                       # asyncio_mode = auto
 ├── .env.example                     # Environment variable template
 │
 ├── app/
 │   ├── config/
-│   │   └── settings.py              # Global AppSettings
+│   │   └── settings.py              # Global AppSettings ✅
 │   │
 │   ├── auth/
-│   │   ├── models.py                # TokenData, AuthorizationResponse
-│   │   ├── repository.py            # TokenRepository interface + InMemoryImpl
-│   │   ├── service.py               # OAuth PKCE flow (Phase 2)
-│   │   └── router.py                # /api/v1/auth/* endpoints (Phase 2)
+│   │   ├── models.py                # TokenData, AuthorizationResponse ✅
+│   │   ├── repository.py            # TokenRepository + InMemoryTokenRepository ✅
+│   │   ├── dependencies.py          # FastAPI DI helpers ✅
+│   │   ├── service.py               # OAuth PKCE flow ✅
+│   │   └── router.py                # /api/v1/auth/* endpoints ✅
 │   │
 │   ├── connectors/
-│   │   ├── base.py                  # BaseConnector ABC + exception hierarchy
-│   │   ├── models.py                # ConnectorResult, ConnectorStatus
+│   │   ├── base.py                  # BaseConnector ABC + exception hierarchy ✅
+│   │   ├── models.py                # ConnectorResult, ConnectorStatus ✅
 │   │   │
-│   │   ├── outlook/                 # Outlook connector (Phase 3–7)
-│   │   │   ├── settings.py
-│   │   │   ├── connector.py
-│   │   │   ├── graph_client.py
+│   │   ├── outlook/
+│   │   │   ├── settings.py          # OutlookSettings ✅
+│   │   │   ├── graph_client.py      # GraphAPIClient ✅
 │   │   │   ├── fetchers/
-│   │   │   │   ├── calendar.py
-│   │   │   │   └── email.py
-│   │   │   ├── normalizer.py
-│   │   │   ├── models.py
-│   │   │   └── router.py
+│   │   │   │   ├── __init__.py      # Fetchers package ✅
+│   │   │   │   ├── calendar.py      # CalendarFetcher ✅ Phase 4
+│   │   │   │   └── email.py         # EmailFetcher 🔜 Phase 5
+│   │   │   ├── normalizer.py        # OutlookNormalizer 📋 Phase 6
+│   │   │   ├── models.py            # CalendarEvent, Email, OutlookContext 📋 Phase 6
+│   │   │   ├── connector.py         # OutlookConnector 📋 Phase 7
+│   │   │   └── router.py            # Debug endpoint 📋 Phase 7
 │   │   │
-│   │   └── slack/                   # Slack connector (Phase 8)
+│   │   └── slack/                   # SlackConnector 📋 Phase 8
 │   │       └── ...
 │   │
 │   ├── context_builder/
-│   │   ├── models.py                # WorkContext, ConnectorSummary
-│   │   └── builder.py               # ContextBuilder (Phase 9)
+│   │   ├── models.py                # WorkContext, ConnectorSummary ✅
+│   │   └── builder.py               # ContextBuilder 📋 Phase 9
 │   │
 │   ├── bob/
-│   │   ├── service.py               # BobService interface (Phase 10)
-│   │   ├── mock_service.py          # MockBobService for dev
-│   │   └── models.py                # BobRequest, RecommendationSet
+│   │   ├── service.py               # BobService interface 📋 Phase 10
+│   │   ├── mock_service.py          # MockBobService for dev 📋 Phase 10
+│   │   └── models.py                # BobRequest, RecommendationSet 📋 Phase 10
 │   │
 │   └── recommendations/
-│       ├── router.py                # Widget-facing API (Phase 11)
-│       └── models.py                # RecommendationResponse
+│       ├── router.py                # Widget-facing API 📋 Phase 11
+│       └── models.py                # RecommendationResponse 📋 Phase 11
 │
 ├── tests/
-│   ├── conftest.py
+│   ├── conftest.py                  # Shared fixtures ✅
+│   ├── auth/
+│   │   └── test_service.py          # 31 tests ✅
 │   └── connectors/
 │       └── outlook/
+│           ├── test_graph_client.py     # 46 tests ✅
+│           └── test_calendar_fetcher.py # 12 tests ✅ Phase 4
 │
 └── docs/
     ├── README.md                    # ← You are here
-    ├── TEAM_RULES.md                # Non-negotiable engineering rules (read first)
     ├── IMPLEMENTATION_CHECKLIST.md  # Phase-by-phase progress tracker
+    ├── CHANGELOG.md                 # Release notes per version
     ├── architecture/
     │   ├── ARCHITECTURE.md          # System design, layers, data flow
     │   └── DECISIONS.md             # Architecture Decision Records (ADRs)
@@ -285,9 +292,12 @@ Abstract interface for OAuth token persistence. Development uses `InMemoryTokenR
 | ConnectorResult | ✅ Complete | Team |
 | WorkContext | ✅ Complete | Team |
 | TokenRepository | ✅ Complete | Team |
-| Auth Service (OAuth PKCE) | 🔄 In Progress | Outlook Dev |
-| Microsoft Graph Client | 🔄 In Progress | Outlook Dev |
-| Outlook Connector | 🔄 In Progress | Outlook Dev |
+| Auth Service (OAuth PKCE) | ✅ Complete | Outlook Dev |
+| Microsoft Graph Client | ✅ Complete | Outlook Dev |
+| CalendarFetcher | ✅ Complete | Outlook Dev |
+| EmailFetcher | 🔜 Next | Outlook Dev |
+| OutlookNormalizer | 📋 Planned | Outlook Dev |
+| OutlookConnector | 📋 Planned | Outlook Dev |
 | Slack Connector | 📋 Planned | Slack Dev |
 | Context Builder | 📋 Planned | Team |
 | IBM Bob Integration | 📋 Planned | Team |
@@ -301,10 +311,10 @@ Abstract interface for OAuth token persistence. Development uses `InMemoryTokenR
 | Phase | Milestone | Status |
 |---|---|---|
 | Phase 1 | Project Foundation | ✅ Complete |
-| Phase 2 | Outlook Authentication | 🔄 Next |
-| Phase 3 | Microsoft Graph Client | 📋 Planned |
-| Phase 4 | Calendar Fetcher | 📋 Planned |
-| Phase 5 | Email Fetcher | 📋 Planned |
+| Phase 2 | Outlook Authentication | ✅ Complete |
+| Phase 3 | Microsoft Graph Client | ✅ Complete |
+| Phase 4 | Calendar Fetcher | ✅ Complete |
+| Phase 5 | Email Fetcher | 🔜 Next |
 | Phase 6 | Normalizer | 📋 Planned |
 | Phase 7 | Outlook Connector | 📋 Planned |
 | Phase 8 | Slack Connector | 📋 Planned |
