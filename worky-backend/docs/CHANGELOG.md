@@ -7,6 +7,39 @@ Versions correspond to Git tags on the `main` branch.
 
 ---
 
+## [Unreleased] — Phase 5: Email Fetcher
+
+### Added
+
+- `app/connectors/outlook/fetchers/email.py` — `EmailFetcher` class.
+  - Accepts `GraphAPIClient` via constructor injection.
+  - Calls `GraphAPIClient.get_messages()` — no direct HTTP.
+  - Returns `response.get("value", [])` — raw Graph message list, no transformation.
+  - Returns `[]` when the inbox is empty or the `value` key is absent.
+  - All `GraphError` subclasses (`GraphAuthError`, `GraphRateLimitError`, `GraphServiceError`) propagate to the caller unchanged.
+  - Mirrors `CalendarFetcher` exactly — single public `fetch()` method, no filtering, no sorting, no normalization.
+- `tests/connectors/outlook/test_email_fetcher.py` — 12 unit tests for `EmailFetcher`.
+  - `TestEmailFetcherSuccess` — raw list returned, object identity preserved, client called once, order preserved, envelope not leaked.
+  - `TestEmailFetcherEmpty` — `value=[]` returns `[]`, missing `value` key returns `[]`, no exception raised.
+  - `TestEmailFetcherErrorPropagation` — `GraphAuthError`, `GraphRateLimitError`, `GraphServiceError` propagate with identity and message intact.
+  - `GraphAPIClient` replaced with `AsyncMock` — no real HTTP calls.
+
+### Tests
+
+| Suite | Tests | Status |
+|---|---|---|
+| `tests/auth/test_service.py` | 31 | ✅ Passing |
+| `tests/connectors/outlook/test_graph_client.py` | 46 | ✅ Passing |
+| `tests/connectors/outlook/test_calendar_fetcher.py` | 12 | ✅ Passing |
+| `tests/connectors/outlook/test_email_fetcher.py` | 12 | ✅ Passing |
+| **Total** | **101** | **✅ All passing** |
+
+### Engineering Review
+
+Phase 5 passed engineering review with verdict **APPROVED — no changes required**.
+
+---
+
 ## [v0.4.0] — Phase 4: Calendar Fetcher
 
 ### Added

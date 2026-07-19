@@ -1,6 +1,6 @@
 # Worky — Implementation Roadmap
 
-> **Last updated:** Phase 4 complete — v0.4.0
+> **Last updated:** Phase 5 complete — pending v0.5.0
 > **Format:** Each phase has an objective, deliverables, dependencies, implementation details, completion criteria, suggested commit, Git tag, and repository state after completion.
 > **Daily tracker:** Use [`../IMPLEMENTATION_CHECKLIST.md`](../IMPLEMENTATION_CHECKLIST.md) to track phase progress and check off tasks.
 
@@ -14,7 +14,7 @@
 | [Phase 2](#phase-2--outlook-authentication) | Outlook Authentication | Outlook Dev | `v0.2.0` | ✅ Complete |
 | [Phase 3](#phase-3--microsoft-graph-client) | Microsoft Graph Client | Outlook Dev | `v0.3.0` | ✅ Complete |
 | [Phase 4](#phase-4--calendar-fetcher) | Calendar Fetcher | Outlook Dev | `v0.4.0` | ✅ Complete |
-| [Phase 5](#phase-5--email-fetcher) | Email Fetcher | Outlook Dev | (→ v0.5.0) | 🔜 Next |
+| [Phase 5](#phase-5--email-fetcher) | Email Fetcher | Outlook Dev | (→ v0.5.0) | ✅ Complete |
 | [Phase 6](#phase-6--normalizer) | Normalizer | Outlook Dev | (→ v0.5.0) | 📋 Planned |
 | [Phase 7](#phase-7--outlook-connector) | Outlook Connector | Outlook Dev | `v0.5.0` | 📋 Planned |
 | [Phase 8](#phase-8--slack-connector) | Slack Connector | Slack Dev | `v0.6.0` | 📋 Planned |
@@ -71,9 +71,9 @@ Any developer can clone the repository, run `pytest tests/` successfully, start 
 
 ## Phase 2 — Outlook Authentication
 
-**Status:** 🔄 In Progress | **Owner:** Outlook Developer | **Git Tag:** `v0.2.0`
+**Status:** ✅ Complete | **Owner:** Outlook Developer | **Git Tag:** `v0.2.0`
 
-**Suggested Commit:** `feat(auth): implement Microsoft OAuth 2.0 PKCE flow`
+**Commit:** `feat(auth): implement Microsoft OAuth 2.0 PKCE flow`
 
 ### Objective
 Implement the Microsoft OAuth 2.0 + PKCE authentication flow that the Outlook connector requires to obtain delegated access tokens for the authenticated user.
@@ -114,9 +114,9 @@ Phase 1 — `TokenData`, `TokenRepository`, `AppSettings`
 
 ## Phase 3 — Microsoft Graph Client
 
-**Status:** 📋 Planned | **Owner:** Outlook Developer | **Git Tag:** `v0.3.0`
+**Status:** ✅ Complete | **Owner:** Outlook Developer | **Git Tag:** `v0.3.0`
 
-**Suggested Commit:** `feat(outlook): implement GraphAPIClient with retry logic`
+**Commit:** `feat(outlook): implement GraphAPIClient with retry logic`
 
 ### Objective
 Implement the `GraphAPIClient` — the single file responsible for all raw HTTP calls to the Microsoft Graph API.
@@ -200,41 +200,45 @@ Phase 3 — `GraphAPIClient`
 
 ## Phase 5 — Email Fetcher
 
-**Status:** 🔜 Next | **Owner:** Outlook Developer | **Git Tag:** (→ v0.5.0)
+**Status:** ✅ Complete | **Owner:** Outlook Developer | **Git Tag:** (→ v0.5.0)
 
-**Suggested Commit:** `feat(outlook): add EmailFetcher for unread and high-importance messages`
+**Commit:** `feat(outlook): add EmailFetcher for messages`
 
 ### Objective
-Implement `EmailFetcher` — fetches unread emails and high-importance emails from Microsoft Graph.
+Implement `EmailFetcher` — fetches email messages from Microsoft Graph.
 
 ### Deliverables
 
-| Deliverable | File |
-|---|---|
-| `EmailFetcher` | `app/connectors/outlook/fetchers/email.py` |
-| Unit tests — unread emails | `tests/connectors/outlook/test_email_fetcher.py` |
-| Unit tests — high-importance filter | |
-| Unit tests — empty inbox | |
-| Fixture: sample Graph messages response | `tests/connectors/outlook/fixtures/messages.json` |
+| Deliverable | File | Status |
+|---|---|---|
+| `EmailFetcher` | `app/connectors/outlook/fetchers/email.py` | ✅ |
+| Unit tests — successful fetch | `tests/connectors/outlook/test_email_fetcher.py` | ✅ |
+| Unit tests — empty inbox | `tests/connectors/outlook/test_email_fetcher.py` | ✅ |
+| Unit tests — missing value key | `tests/connectors/outlook/test_email_fetcher.py` | ✅ |
+| Unit tests — all GraphError propagation | `tests/connectors/outlook/test_email_fetcher.py` | ✅ |
 
 ### Implementation Details
 
-- Fetch unread messages: `$filter=isRead eq false`
-- Fetch high-importance messages: `$filter=importance eq 'high'`
-- `$select=subject,from,receivedDateTime,importance,bodyPreview,isRead,hasAttachments`
-- `$orderby=receivedDateTime desc`, `$top=25`
-- Return two separate raw lists
+- Accepts `GraphAPIClient` via constructor injection
+- Calls `GraphAPIClient.get_messages()` — no direct HTTP
+- Returns `response.get("value", [])` — raw list, no transformation
+- Empty inbox or absent `value` key → returns `[]`
+- All `GraphError` subclasses propagate to caller without catching
+- Mirrors `CalendarFetcher` — single public `fetch()` method
 
 ### Dependencies
 Phase 3 — `GraphAPIClient`
 
 ### Repository State After Completion
-`EmailFetcher` returns separate unread and high-importance message lists. All tests pass with a mock `GraphAPIClient`.
+`EmailFetcher` returns raw message dicts. Empty inbox returns `[]`. 12 tests pass (101 total). No real HTTP calls in tests.
 
 ### Completion Criteria
-- Unread filter verified in tests
-- High-importance filter verified in tests
-- Empty inbox returns `[]` without error
+- ✅ `test_returns_raw_message_list` passes
+- ✅ `test_empty_value_list_returns_empty_list` passes
+- ✅ `test_missing_value_key_returns_empty_list` passes
+- ✅ `GraphAuthError`, `GraphRateLimitError`, `GraphServiceError` all propagate
+- ✅ No real HTTP calls in tests
+- ✅ Engineering review: APPROVED
 
 ---
 
