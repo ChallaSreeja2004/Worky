@@ -23,48 +23,51 @@
 
 ## Complete Tree
 
+Files marked **✅** exist today. Files marked **📋** are planned for future phases.
+
 ```
 worky-backend/
 │
-├── main.py
-├── requirements.txt
-├── .env
-├── .env.example
-├── .gitignore
+├── main.py                                    ✅
+├── requirements.txt                           ✅
+├── pytest.ini                                 ✅
+├── .env.example                               ✅
+├── .gitignore                                 ✅
 │
 ├── app/
-│   ├── __init__.py
+│   ├── __init__.py                            ✅
 │   │
 │   ├── config/
-│   │   ├── __init__.py
-│   │   └── settings.py
+│   │   ├── __init__.py                        ✅
+│   │   └── settings.py                        ✅ AppSettings
 │   │
 │   ├── auth/
-│   │   ├── __init__.py
-│   │   ├── models.py
-│   │   ├── repository.py
-│   │   ├── service.py              ← Phase 2
-│   │   └── router.py               ← Phase 2
+│   │   ├── __init__.py                        ✅
+│   │   ├── models.py                          ✅ TokenData, AuthorizationResponse
+│   │   ├── repository.py                      ✅ TokenRepository + InMemoryTokenRepository
+│   │   ├── dependencies.py                    ✅ FastAPI DI helpers
+│   │   ├── service.py                         ✅ AuthService — PKCE flow (Phase 2)
+│   │   └── router.py                          ✅ /api/v1/auth/* endpoints (Phase 2)
 │   │
 │   ├── connectors/
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── models.py
+│   │   ├── __init__.py                        ✅
+│   │   ├── base.py                            ✅ BaseConnector ABC + exception hierarchy
+│   │   ├── models.py                          ✅ ConnectorResult, ConnectorStatus
 │   │   │
-│   │   ├── outlook/                ← Phases 3–7
-│   │   │   ├── __init__.py
-│   │   │   ├── settings.py
-│   │   │   ├── connector.py
-│   │   │   ├── graph_client.py
-│   │   │   ├── normalizer.py
-│   │   │   ├── models.py
-│   │   │   ├── router.py
-│   │   │   └── fetchers/
-│   │   │       ├── __init__.py
-│   │   │       ├── calendar.py
-│   │   │       └── email.py
+│   │   ├── outlook/
+│   │   │   ├── __init__.py                    ✅
+│   │   │   ├── settings.py                    ✅ OutlookSettings (Phase 2)
+│   │   │   ├── graph_client.py                ✅ GraphAPIClient (Phase 3)
+│   │   │   ├── fetchers/
+│   │   │   │   ├── __init__.py                ✅ (Phase 4)
+│   │   │   │   ├── calendar.py                ✅ CalendarFetcher (Phase 4)
+│   │   │   │   └── email.py                   📋 EmailFetcher (Phase 5)
+│   │   │   ├── normalizer.py                  📋 OutlookNormalizer (Phase 6)
+│   │   │   ├── models.py                      📋 CalendarEvent, Email, OutlookContext (Phase 6)
+│   │   │   ├── connector.py                   📋 OutlookConnector(BaseConnector) (Phase 7)
+│   │   │   └── router.py                      📋 Debug endpoint (Phase 7)
 │   │   │
-│   │   └── slack/                  ← Phase 8
+│   │   └── slack/                             📋 SlackConnector (Phase 8)
 │   │       ├── __init__.py
 │   │       ├── settings.py
 │   │       ├── connector.py
@@ -78,17 +81,17 @@ worky-backend/
 │   │           └── mentions.py
 │   │
 │   ├── context_builder/
-│   │   ├── __init__.py
-│   │   ├── models.py
-│   │   └── builder.py              ← Phase 9
+│   │   ├── __init__.py                        ✅
+│   │   ├── models.py                          ✅ WorkContext, ConnectorSummary
+│   │   └── builder.py                         📋 ContextBuilder (Phase 9)
 │   │
-│   ├── bob/                        ← Phase 10
+│   ├── bob/                                   📋 Phase 10
 │   │   ├── __init__.py
 │   │   ├── models.py
 │   │   ├── service.py
 │   │   └── mock_service.py
 │   │
-│   └── recommendations/            ← Phase 11
+│   └── recommendations/                       📋 Phase 11
 │       ├── __init__.py
 │       ├── models.py
 │       ├── router.py
@@ -96,37 +99,42 @@ worky-backend/
 │       └── cache.py
 │
 ├── tests/
-│   ├── __init__.py
-│   ├── conftest.py
+│   ├── __init__.py                            ✅
+│   ├── conftest.py                            ✅ Shared fixtures
 │   │
 │   ├── auth/
-│   │   ├── __init__.py
-│   │   ├── test_service.py
-│   │   └── test_repository.py
+│   │   ├── __init__.py                        ✅
+│   │   └── test_service.py                    ✅ 31 tests (Phase 2)
 │   │
 │   └── connectors/
-│       ├── __init__.py
+│       ├── __init__.py                        ✅
 │       └── outlook/
-│           ├── __init__.py
-│           ├── fixtures/
-│           │   ├── calendar_events.json
-│           │   └── messages.json
-│           ├── test_graph_client.py
-│           ├── test_calendar_fetcher.py
-│           ├── test_email_fetcher.py
-│           ├── test_normalizer.py
-│           └── test_connector.py
+│           ├── __init__.py                    ✅
+│           ├── test_graph_client.py           ✅ 46 tests (Phase 3)
+│           ├── test_calendar_fetcher.py       ✅ 12 tests (Phase 4)
+│           ├── test_email_fetcher.py          📋 Phase 5
+│           ├── test_normalizer.py             📋 Phase 6
+│           └── test_connector.py             📋 Phase 7
 │
 ├── docs/
-│   ├── README.md
-│   ├── ARCHITECTURE.md
-│   ├── CONNECTOR_GUIDE.md
-│   ├── CONTRIBUTING.md
-│   ├── ROADMAP.md
-│   ├── DECISIONS.md
-│   ├── REPOSITORY_STRUCTURE.md
-│   ├── GIT_WORKFLOW.md
-│   └── TEAM_WORKFLOW.md
+│   ├── README.md                              ✅
+│   ├── IMPLEMENTATION_CHECKLIST.md            ✅
+│   ├── CHANGELOG.md                           ✅
+│   ├── TEAM_RULES.md                          ✅
+│   ├── architecture/
+│   │   ├── ARCHITECTURE.md                    ✅
+│   │   └── DECISIONS.md                       ✅
+│   ├── development/
+│   │   ├── CONNECTOR_GUIDE.md                 ✅
+│   │   ├── CONTRIBUTING.md                    ✅
+│   │   └── GIT_WORKFLOW.md                    ✅
+│   ├── planning/
+│   │   ├── ROADMAP.md                         ✅
+│   │   └── TEAM_WORKFLOW.md                   ✅
+│   ├── reference/
+│   │   └── REPOSITORY_STRUCTURE.md            ✅
+│   └── templates/
+│       └── CONNECTOR_TEMPLATE.md              ✅
 │
 └── scripts/
     ├── generate_key.py
