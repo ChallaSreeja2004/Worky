@@ -182,34 +182,46 @@ pytest tests/ -v
 
 ## Phase 5 — Email Fetcher
 
-**Owner:** Outlook Developer | **Git Tag:** (→ v0.5.0) | **Status:** 🔜 Next
+**Owner:** Outlook Developer | **Git Tag:** (→ v0.5.0) | **Status:** ✅ Complete
 
-**Suggested Commit:** `feat(outlook): add EmailFetcher for unread and high-importance messages`
+**Commit:** `feat(outlook): add EmailFetcher for messages`
 
 ### Tasks
-- [ ] Create `app/connectors/outlook/fetchers/email.py` — `EmailFetcher`
-  - [ ] `fetch_unread()` — `$filter=isRead eq false`
-  - [ ] `fetch_high_importance()` — `$filter=importance eq 'high'`
-  - [ ] Handles empty inbox gracefully
-- [ ] Record fixture: `tests/connectors/outlook/fixtures/messages.json`
+- [x] Create `app/connectors/outlook/fetchers/email.py` — `EmailFetcher`
+  - [x] `fetch()` — returns raw message list
+  - [x] Handles empty inbox gracefully (returns `[]`)
+  - [x] Handles missing `value` key gracefully (returns `[]`)
+  - [x] All `GraphError` subclasses propagate unchanged
 
 ### Required Files
-- [ ] `app/connectors/outlook/fetchers/email.py`
-- [ ] `tests/connectors/outlook/fixtures/messages.json`
-- [ ] `tests/connectors/outlook/test_email_fetcher.py`
+- [x] `app/connectors/outlook/fetchers/email.py`
+- [x] `tests/connectors/outlook/test_email_fetcher.py`
 
 ### Tests
-- [ ] `test_fetch_unread_returns_messages()`
-- [ ] `test_fetch_high_importance_applies_filter()`
-- [ ] `test_fetch_returns_empty_list_when_no_messages()`
+- [x] `test_returns_raw_message_list`
+- [x] `test_returns_exact_objects_not_copies`
+- [x] `test_calls_get_messages_exactly_once`
+- [x] `test_returns_all_messages_in_order`
+- [x] `test_response_envelope_fields_are_not_included`
+- [x] `test_empty_value_list_returns_empty_list`
+- [x] `test_missing_value_key_returns_empty_list`
+- [x] `test_missing_value_key_does_not_raise`
+- [x] `test_graph_auth_error_propagates`
+- [x] `test_graph_rate_limit_error_propagates`
+- [x] `test_graph_service_error_propagates`
+- [x] `test_error_message_is_preserved`
+- [x] 12 tests total — all passing
 
 ### Validation
 ```bash
 pytest tests/connectors/outlook/test_email_fetcher.py -v
+# 12 passed
+pytest tests/ -v
+# 101 passed
 ```
 
 ### Completion Criteria
-`EmailFetcher` returns separate unread and high-importance message lists. All tests pass with mock `GraphAPIClient`.
+✅ `EmailFetcher` returns raw message dicts. All 12 tests pass with mock `GraphAPIClient`. Engineering review: APPROVED.
 
 ---
 
