@@ -60,7 +60,7 @@ function statusDotClass(
 }
 
 export default function WidgetShell({ children }: WidgetShellProps) {
-  const { user, isAuthenticated } = useAuth()
+  const { user, isAuthenticated, logout } = useAuth()
   const { refresh, connectorStatus, collectedAt, isRefreshing } = useOutlookState()
 
   // C3: keep a render-tick counter that increments every 60 seconds so the
@@ -73,6 +73,23 @@ export default function WidgetShell({ children }: WidgetShellProps) {
     const id = setInterval(() => setTick((t) => t + 1), 60_000)
     return () => clearInterval(id)
   }, [])
+
+  // Two-click logout safety guard: first click shows "Sign out?" label for 3 s;
+  // second click within that window confirms and calls logout().
+  const [logoutPending, setLogoutPending] = useState(false)
+  useEffect(() => {
+    if (!logoutPending) return
+    const id = setTimeout(() => setLogoutPending(false), 3_000)
+    return () => clearTimeout(id)
+  }, [logoutPending])
+
+  function handleLogoutClick() {
+    if (!logoutPending) {
+      setLogoutPending(true)
+    } else {
+      logout()
+    }
+  }
 
   const dotClass    = statusDotClass(isAuthenticated, connectorStatus)
   const footerLabel = collectedAt ? formatRelativeTime(collectedAt) : '—'
@@ -111,13 +128,13 @@ export default function WidgetShell({ children }: WidgetShellProps) {
 
           {/*
            * Refresh button — active when authenticated.
-           * Calls the connector refresh callback via OutlookStateContext.
+           * Calls the combined connector + recommendations refresh via OutlookStateContext.
            * Disabled while a refresh is already in flight.
            */}
           <button
             type="button"
             aria-label="Refresh"
-            title="Refresh Outlook data"
+            title="Refresh data"
             disabled={!isAuthenticated || isRefreshing}
             onClick={isAuthenticated ? refresh : undefined}
             className={`rounded p-1 transition-colors duration-100 ${
@@ -141,6 +158,40 @@ export default function WidgetShell({ children }: WidgetShellProps) {
               />
             </svg>
           </button>
+
+          {/*
+           * Logout button — shown only when authenticated.
+           * First click shows "Sign out?" label for 3 s as a safety guard.
+           * Second click within that window calls logout().
+           */}
+          {isAuthenticated && (
+            <button
+              type="button"
+              aria-label={logoutPending ? 'Confirm sign out' : 'Sign out'}
+              title={logoutPending ? 'Click again to confirm' : 'Sign out'}
+              onClick={handleLogoutClick}
+              className="rounded p-1 transition-colors duration-100 text-gray-400 hover:text-gray-600 cursor-pointer"
+            >
+              {logoutPending ? (
+                <span className="text-[10px] font-medium text-red-400">Sign out?</span>
+              ) : (
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9"
+                  />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
 
       </header>

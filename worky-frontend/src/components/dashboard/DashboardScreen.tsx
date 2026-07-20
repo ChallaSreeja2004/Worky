@@ -4,28 +4,30 @@
  * Main widget view shown after the user has authenticated.
  *
  * This component is presentation-only.  It receives pre-fetched data as
- * props from ScreenManager and renders it.  It never calls useOutlookContext
- * or any other hook directly — that is ScreenManager's responsibility.
+ * props from ScreenManager and renders it.  It never calls hooks directly —
+ * that is ScreenManager's responsibility.
  *
  * Section map
  * -----------
- * Upcoming Meetings  — live: data.calendar_events from ConnectorResult
- * Important Emails   — live: data.emails from ConnectorResult
- * Today's Priorities — future: IBM Bob recommendations (Phase 6+)
- * Blockers           — future: IBM Bob analysis (Phase 6+)
- * Learning Reminder  — future: IBM Bob recommendation (Phase 6+)
+ * Today's Priorities  — live: IBM Bob recommendations from RecommendationSet
+ * Upcoming Meetings   — live: data.calendar_events from ConnectorResult
+ * Important Emails    — live: data.emails from ConnectorResult
  *
  * Props
  * -----
- * result       — ConnectorResult from useOutlookContext, or null before first fetch
- * isLoading    — true while the first fetch is in flight (no data yet)
- * isRefreshing — true while a refresh is in flight (stale data still shown)
- * error        — network/unexpected error string, or null
+ * result           — ConnectorResult from useOutlookContext, or null before first fetch
+ * isLoading        — true while the first Outlook fetch is in flight (no data yet)
+ * isRefreshing     — true while a refresh is in flight (stale data still shown)
+ * error            — Outlook network/unexpected error string, or null
+ * recommendations  — Recommendation[] from useRecommendations, or null before first fetch
+ * recsLoading      — true while recommendations are being fetched for the first time
+ * recsError        — recommendations error string, or null
  */
 
-import type { ConnectorResult } from '../../types/index.ts'
+import type { ConnectorResult, Recommendation } from '../../types/index.ts'
 import MeetingList from './MeetingList.tsx'
 import EmailList from './EmailList.tsx'
+import RecommendationList from './RecommendationList.tsx'
 import ErrorBanner from '../shared/ErrorBanner.tsx'
 import StatusBadge from '../shared/StatusBadge.tsx'
 
@@ -34,6 +36,9 @@ interface DashboardScreenProps {
   isLoading: boolean
   isRefreshing: boolean
   error: string | null
+  recommendations: Recommendation[] | null
+  recsLoading: boolean
+  recsError: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -43,17 +48,13 @@ interface DashboardScreenProps {
 interface SectionProps {
   title: string
   children: React.ReactNode
-  comingSoon?: boolean
 }
 
-function Section({ title, children, comingSoon = false }: SectionProps) {
+function Section({ title, children }: SectionProps) {
   return (
     <section className="pt-3 pb-2">
       <div className="flex items-center justify-between px-4 mb-1.5">
         <p className="text-[11px] font-medium text-gray-400">{title}</p>
-        {comingSoon && (
-          <span className="text-[10px] text-gray-300">Coming soon</span>
-        )}
       </div>
       <div className="border-b border-gray-50">
         {children}
@@ -71,9 +72,17 @@ export default function DashboardScreen({
   isLoading,
   isRefreshing,
   error,
+  recommendations,
+  recsLoading,
+  recsError,
 }: DashboardScreenProps) {
   const events = result?.data?.calendar_events ?? []
   const emails = result?.data?.emails ?? []
+
+  // Recommendations are shown in the order Bob provides (priority ascending).
+  // Null before first fetch is treated the same as loading.
+  const recItems = recommendations ?? []
+  const recsAreLoading = recsLoading || (recommendations === null && !recsError)
 
   return (
     <div className="flex flex-col py-1">
@@ -102,6 +111,15 @@ export default function DashboardScreen({
         </div>
       )}
 
+      {/* Today's Priorities — IBM Bob recommendations */}
+      <Section title="today's priorities">
+        <RecommendationList
+          items={recItems}
+          isLoading={recsAreLoading}
+          error={recsError}
+        />
+      </Section>
+
       {/* Upcoming Meetings */}
       <Section title="upcoming meetings">
         <MeetingList events={events} isLoading={isLoading} />
@@ -110,19 +128,6 @@ export default function DashboardScreen({
       {/* Important Emails */}
       <Section title="important emails">
         <EmailList emails={emails} isLoading={isLoading} />
-      </Section>
-
-      {/* Future IBM Bob sections — placeholders */}
-      <Section title="today's priorities" comingSoon>
-        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
-      </Section>
-
-      <Section title="blockers" comingSoon>
-        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
-      </Section>
-
-      <Section title="learning reminder" comingSoon>
-        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
       </Section>
 
     </div>
