@@ -74,9 +74,9 @@ app.add_middleware(
 # Auth layer — Phase 2
 app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["Authentication"])
 
-# [TODO — Outlook connector]
-# from app.connectors.outlook.router import router as outlook_router
-# app.include_router(outlook_router, prefix=f"{settings.api_v1_prefix}/connectors/outlook", tags=["Outlook"])
+# Outlook connector — Phase 7
+from app.connectors.outlook.router import router as outlook_router
+app.include_router(outlook_router, prefix=f"{settings.api_v1_prefix}/connectors/outlook", tags=["Outlook"])
 
 # [TODO — Slack connector — teammate's responsibility]
 # from app.connectors.slack.router import router as slack_router
