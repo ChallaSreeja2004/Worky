@@ -8,41 +8,38 @@ DESIGN RATIONALE
 These functions are the single point of wiring between FastAPI's dependency
 injection system and the Recommendation Service.  They ensure:
 
-  • RecommendationService is never instantiated directly inside routers or
-    schedulers — it is always obtained through the DI system.
-  • BobService is injected into RecommendationService at this layer, keeping
-    the two services decoupled from each other.
-  • Every caller that requests a RecommendationService receives a fresh
-    instance wired to the shared BobService singleton.
-
-WHY NOT A SINGLETON FOR RecommendationService?
------------------------------------------------
-RecommendationService is stateless — it holds no per-user or per-request
-state.  It is cheap to construct (a single attribute assignment).  Creating
-a new instance per call is therefore safe and avoids any risk of state leaking
-between requests.  This matches the pattern used by auth/router.py, which
-constructs AuthService per-request via get_auth_service().
+  • RecommendationService is never instantiated directly inside routers.
+  • AuthService, ContextBuilder, and connectors are obtained through DI so
+    they can be replaced with test doubles without changing the router.
+  • Each dependency provider has a single responsibility.
 
 IMPORT RULES
 ------------
 This module may import from:
   • Python standard library
   • FastAPI
+  • app.auth.dependencies
+  • app.auth.service            (AuthService — type annotation only)
   • app.bob.dependencies
-  • app.bob.service          (BobService interface — type annotation only)
+  • app.bob.service             (BobService interface — type annotation only)
+  • app.connectors.outlook.*
+  • app.context_builder.builder
   • app.recommendations.service
 
 It must NOT import from:
-  • app.connectors.*
-  • app.auth
   • app.config
-  • app.context_builder
 """
 
 from __future__ import annotations
 
+from app.auth.dependencies import get_auth_service
+from app.auth.service import AuthService
 from app.bob.dependencies import get_bob_service
 from app.bob.service import BobService
+from app.connectors.outlook.connector import OutlookConnector
+from app.connectors.outlook.graph_client import GraphAPIClient
+from app.connectors.outlook.normalizer import OutlookNormalizer
+from app.context_builder.builder import ContextBuilder
 from app.recommendations.service import RecommendationService
 
 
@@ -65,3 +62,37 @@ def get_recommendation_service() -> RecommendationService:
     """
     bob_service: BobService = get_bob_service()
     return RecommendationService(bob_service=bob_service)
+
+
+def get_context_builder() -> ContextBuilder:
+    """
+    FastAPI dependency provider for ContextBuilder.
+
+    Returns a fresh stateless ContextBuilder.  ContextBuilder holds no
+    per-user state so a new instance per request is correct and cheap.
+    """
+    return ContextBuilder()
+
+
+def get_auth_service_dep() -> AuthService:
+    """
+    FastAPI dependency provider for AuthService.
+
+    Thin wrapper around get_auth_service() from app.auth.dependencies so
+    the recommendations router can declare it without importing the auth
+    package directly.
+    """
+    return get_auth_service()
+
+
+def build_outlook_connector(access_token: str) -> OutlookConnector:
+    """
+    Construct a fully-wired OutlookConnector for the given access token.
+
+    Called by the router after obtaining a valid token from AuthService.
+    Returns a fresh connector instance scoped to this request's token —
+    GraphAPIClient is not a singleton (it carries a bearer token).
+    """
+    client = GraphAPIClient(access_token=access_token)
+    normalizer = OutlookNormalizer()
+    return OutlookConnector(graph_client=client, normalizer=normalizer)
