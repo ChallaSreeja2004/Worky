@@ -490,7 +490,7 @@ class TestBobSettings:
         settings = BobSettings(bob_api_url="", bob_api_key="")
         assert settings.bob_api_url == ""
         assert settings.bob_api_key == ""
-        assert settings.bob_timeout_seconds == 30.0
+        assert settings.bob_timeout_seconds == 120.0
 
     def test_bob_settings_custom_timeout(self):
         """bob_timeout_seconds can be overridden."""
@@ -614,11 +614,12 @@ class TestRecommendationSetModel:
 class TestGetBobServiceProvider:
 
     def test_get_bob_service_returns_bob_service_instance(self):
-        """get_bob_service() returns an instance compatible with BobService."""
+        """get_bob_service() returns a BobService-compatible instance (BobCLIService)."""
+        from app.bob.cli_service import BobCLIService
         from app.bob.dependencies import _get_shared_bob_service, get_bob_service
         _get_shared_bob_service.cache_clear()
         service = get_bob_service()
-        assert isinstance(service, MockBobService)
+        assert isinstance(service, BobCLIService)
         _get_shared_bob_service.cache_clear()
 
     def test_get_bob_service_returns_same_instance_on_repeated_calls(self):

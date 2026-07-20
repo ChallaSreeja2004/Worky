@@ -10,29 +10,27 @@ injection system and the Bob layer.  They ensure:
 
   • BobService is never instantiated directly inside routers or schedulers.
   • The concrete implementation (MockBobService in development,
-    IBMBobService in production) is swapped at this single location when
-    the deployment environment changes.
+    BobCLIService in production) is swapped at this single location.
   • Every caller that needs a BobService gets the same shared singleton
     instance, keeping the service stateless and consistent.
 
-SWITCHING FROM MOCK TO IBM BOB
-------------------------------
-To switch to IBMBobService when real credentials become available, change
-_get_shared_bob_service() to:
+CURRENT IMPLEMENTATION
+----------------------
+BobCLIService is active.  It invokes Bob Shell as a subprocess, sends the
+WorkContext via stdin, and parses the stream-json output.
 
-    from app.bob.service import IBMBobService
-    from app.bob.settings import get_bob_settings
+Bob Shell must be installed and authenticated before starting the server.
+Verify with:  bob --version
+
+SWITCHING BACK TO MOCK (e.g. for CI without Bob Shell)
+-------------------------------------------------------
+Replace _get_shared_bob_service() with:
+
+    from app.bob.mock_service import MockBobService
 
     @lru_cache
-    def _get_shared_bob_service() -> IBMBobService:
-        settings = get_bob_settings()
-        return IBMBobService(
-            api_url=settings.bob_api_url,
-            api_key=settings.bob_api_key,
-            timeout=settings.bob_timeout_seconds,
-        )
-
-Zero changes are required in any caller — they depend only on BobService.
+    def _get_shared_bob_service() -> MockBobService:
+        return MockBobService()
 
 IMPORT RULES
 ------------
@@ -41,7 +39,8 @@ This module may import from:
   • FastAPI
   • app.bob.service
   • app.bob.mock_service
-  • app.bob.settings      (when switching to IBMBobService)
+  • app.bob.cli_service
+  • app.bob.settings
 
 It must NOT import from connectors, context_builder (except via BobService
 interface), auth, or recommendations packages.
@@ -51,24 +50,30 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from app.bob.mock_service import MockBobService
+from app.bob.cli_service import BobCLIService
 from app.bob.service import BobService
+from app.bob.settings import get_bob_settings
 
 
 @lru_cache
-def _get_shared_bob_service() -> MockBobService:
+def _get_shared_bob_service() -> BobCLIService:
     """
     Return the process-wide singleton BobService implementation.
 
     lru_cache ensures the service is constructed only once per process
-    lifetime.  MockBobService is used by default — it requires no
-    credentials and works without internet access.
+    lifetime.  BobCLIService invokes Bob Shell as a subprocess — Bob Shell
+    must be installed and authenticated on the host machine.
 
-    To switch to IBMBobService for production, replace this function's
-    body and return type as documented in the module docstring above.
-    Zero changes are required elsewhere.
+    Configuration is read from BobSettings (BOB_EXECUTABLE, BOB_CHAT_MODE,
+    BOB_TIMEOUT_SECONDS in .env).  All settings have sensible defaults so
+    no .env changes are required if bob is on PATH.
     """
-    return MockBobService()
+    settings = get_bob_settings()
+    return BobCLIService(
+        bob_executable=settings.bob_executable,
+        chat_mode=settings.bob_chat_mode,
+        timeout=settings.bob_timeout_seconds,
+    )
 
 
 def get_bob_service() -> BobService:
