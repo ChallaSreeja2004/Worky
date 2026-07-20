@@ -1,18 +1,16 @@
 """
 app/bob/settings.py
 ====================
-BobSettings — IBM Bob API configuration.
+BobSettings — IBM Bob CLI configuration.
 
-Owns every environment variable required to communicate with the IBM Bob
-reasoning service.  Nothing here belongs in AppSettings — keeping Bob settings
-isolated follows the Single Responsibility Principle and ADR-015, which
-mandates that each integration defines its own settings class rather than
-growing AppSettings into a god-object.
+Owns every environment variable required to invoke Bob Shell as a subprocess.
+Nothing here belongs in AppSettings — keeping Bob settings isolated follows
+the Single Responsibility Principle and ADR-015.
 
 WHAT THIS MODULE DOES
 ---------------------
-  • Reads BOB_API_URL and BOB_API_KEY from the environment (or .env file).
-  • Exposes a computed timeout property.
+  • Reads BOB_EXECUTABLE, BOB_CHAT_MODE, and BOB_TIMEOUT_SECONDS from the
+    environment (or .env file).
 
 WHAT THIS MODULE DOES NOT DO
 ------------------------------
@@ -37,45 +35,53 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class BobSettings(BaseSettings):
     """
-    IBM Bob API configuration loaded from environment variables.
+    IBM Bob CLI configuration loaded from environment variables.
 
-    Required variables (must be set in .env or environment for IBMBobService):
-      BOB_API_URL — base URL of the IBM Bob REST API endpoint
-      BOB_API_KEY — API key used to authenticate with IBM Bob
+    Optional variables (all have sensible defaults for BobCLIService):
+      BOB_EXECUTABLE    — path or name of the bob CLI command
+      BOB_CHAT_MODE     — Bob chat mode used for reasoning calls
+      BOB_TIMEOUT_SECONDS — total seconds to wait for Bob to respond
 
-    Optional variables (have sensible defaults):
-      BOB_TIMEOUT_SECONDS — per-request timeout when calling IBM Bob
+    Legacy variables (kept for backward compatibility, unused by BobCLIService):
+      BOB_API_URL — retained so existing .env files do not cause validation errors
+      BOB_API_KEY — retained so existing .env files do not cause validation errors
     """
 
     # ------------------------------------------------------------------
-    # IBM Bob API
+    # Bob Shell CLI
+    # ------------------------------------------------------------------
+    bob_executable: str = "bob"
+    """
+    Path or name of the Bob Shell CLI command.
+
+    Defaults to "bob", resolved via PATH.  Override to an absolute path
+    if bob is not on the system PATH in your deployment environment.
+
+    Example: /usr/local/bin/bob
+    """
+
+    bob_chat_mode: str = "ask"
+    """
+    Bob chat mode for reasoning calls.  "ask" is the read-only mode
+    that does not modify files or run shell commands.
+
+    Valid choices: ask | code | plan | advanced
+    """
+
+    bob_timeout_seconds: float = 120.0
+    """
+    Total seconds to wait for Bob Shell to complete a request.
+
+    Bob generation for a full WorkContext typically takes 15–30 s.
+    120 s is a safe ceiling for production.  Lower this if you want
+    faster failure detection; raise it for very large contexts.
+    """
+
+    # ------------------------------------------------------------------
+    # Legacy — kept so existing .env files remain valid
     # ------------------------------------------------------------------
     bob_api_url: str = ""
-    """
-    Base URL of the IBM Bob reasoning service endpoint.
-
-    Example: https://bob.example.ibm.com/api/v1
-    Must NOT have a trailing slash.
-
-    Defaults to empty string — IBMBobService will raise BobConfigError if
-    an actual call is attempted without a real URL being set.
-    """
-
     bob_api_key: str = ""
-    """
-    API key for authenticating with IBM Bob.  Never logged.
-
-    Defaults to empty string — IBMBobService will raise BobConfigError if
-    an actual call is attempted without a real key being set.
-    """
-
-    bob_timeout_seconds: float = 30.0
-    """
-    Per-request HTTP timeout (seconds) when calling the IBM Bob API.
-
-    Bob's reasoning may take several seconds for complex contexts.  30 s
-    is the default maximum to avoid hanging the scheduled pipeline.
-    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
