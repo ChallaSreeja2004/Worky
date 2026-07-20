@@ -78,9 +78,9 @@ app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["
 from app.connectors.outlook.router import router as outlook_router
 app.include_router(outlook_router, prefix=f"{settings.api_v1_prefix}/connectors/outlook", tags=["Outlook"])
 
-# [TODO — Slack connector — teammate's responsibility]
-# from app.connectors.slack.router import router as slack_router
-# app.include_router(slack_router, prefix=f"{settings.api_v1_prefix}/connectors/slack", tags=["Slack"])
+# Slack connector
+from app.connectors.slack.router import router as slack_router
+app.include_router(slack_router, prefix=f"{settings.api_v1_prefix}/connectors/slack", tags=["Slack"])
 
 # [TODO — Recommendations (widget-facing API)]
 # from app.recommendations.router import router as recommendations_router
