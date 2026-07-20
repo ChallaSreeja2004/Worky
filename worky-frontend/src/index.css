@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/*
+ * index.css
+ * =========
+ * Global reset and root-level layout only.
+ *
+ * Tailwind's base reset is applied via @import above.
+ * Rules here address the page-level shell that wraps the widget:
+ * - full-viewport grey background (mimics a desktop environment)
+ * - centred widget placement
+ * - system font stack
+ *
+ * Component-level styles live in Tailwind utility classes on each component.
+ * Do not add component styles here.
+ */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  /* Neutral desktop-like background so the floating widget stands out. */
+  background-color: #e5e7eb;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  /* Centre the widget on the page during browser development.
+     In Electron/Tauri the BrowserWindow will be sized to the widget
+     dimensions and this centering becomes irrelevant — the widget
+     simply fills the window. */
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem 1rem;
+  box-sizing: border-box;
+}

@@ -1,0 +1,9 @@
+# src/services/
+#
+# Service modules that wrap the api/ layer with domain logic live here.
+#
+# Phase 2 will add:
+#   authService.ts    — login(), handleAuthSuccess() helpers
+#
+# Phase 3 will add:
+#   outlookService.ts — getOutlookContext() typed wrapper
