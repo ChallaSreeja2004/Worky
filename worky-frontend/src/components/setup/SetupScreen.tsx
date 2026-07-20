@@ -3,14 +3,26 @@
  * ======================================
  * Onboarding screen shown before the user has authenticated.
  *
- * Phase 2 will activate the "Connect Outlook" button by navigating to
- * GET /api/v1/auth/login to begin the Microsoft OAuth PKCE flow.
- * After a successful login, the backend redirects to /auth/success
- * with user_id, display_name, and email as query parameters.
- * No access_token is passed through the redirect.
+ * Clicking "Connect Outlook" navigates the browser to the backend login
+ * endpoint, which starts the Microsoft OAuth 2.0 PKCE flow.
+ *
+ * The frontend does NOT construct any OAuth URLs — it simply redirects to
+ * /api/v1/auth/login and the backend handles everything else.
+ *
+ * After a successful login the backend redirects to:
+ *   FRONTEND_URL/auth/success?user_id=...&display_name=...&email=...
+ * No access_token is ever included — the backend manages tokens server-side.
  */
 
 export default function SetupScreen() {
+  function handleLogin() {
+    // Navigate the entire browser window to the backend login endpoint.
+    // The backend generates the PKCE pair and redirects to Microsoft.
+    // On success Microsoft redirects back to the backend callback, which
+    // then redirects here to /auth/success with user identity params.
+    window.location.href = `${import.meta.env.VITE_API_BASE_URL as string}/api/v1/auth/login`
+  }
+
   return (
     <div className="flex flex-col items-center justify-center gap-5 py-8 px-6">
 
@@ -41,16 +53,10 @@ export default function SetupScreen() {
         </p>
       </div>
 
-      {/*
-       * Phase 2: remove the `disabled` attribute and add an onClick handler:
-       *   window.location.href = `${import.meta.env.VITE_API_BASE_URL}/api/v1/auth/login`
-       * After login, the backend redirects to /auth/success?user_id=...&display_name=...&email=...
-       * No access_token is included in the redirect — the backend manages tokens server-side.
-       */}
       <button
         type="button"
-        disabled
-        className="rounded-md bg-blue-600 px-5 py-2 text-sm font-medium text-white opacity-40 cursor-not-allowed"
+        onClick={handleLogin}
+        className="rounded-md bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors duration-100"
       >
         Connect Outlook
       </button>

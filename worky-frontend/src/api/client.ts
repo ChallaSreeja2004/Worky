@@ -39,28 +39,31 @@ const apiClient = axios.create({
 // ---------------------------------------------------------------------------
 // Request interceptor
 // ---------------------------------------------------------------------------
-// Phase 2 will use this interceptor to attach the user_id as a query
-// parameter on requests that require it (e.g. the Outlook context endpoint).
-// The backend does NOT accept Bearer tokens from the frontend — token
-// management is handled entirely server-side.  The frontend holds only
-// user_id, display_name, and email (from the /auth/success redirect).
+// user_id is passed as a query parameter by each individual API call that
+// requires it (e.g. fetchOutlookContext).  No Bearer tokens are ever sent —
+// the backend owns the full token lifecycle server-side.
 apiClient.interceptors.request.use(
-  (config) => {
-    // TODO (Phase 2): attach user_id from auth state to context endpoint calls.
-    return config
-  },
+  (config) => config,
   (error: unknown) => Promise.reject(error),
 )
 
 // ---------------------------------------------------------------------------
 // Response interceptor
 // ---------------------------------------------------------------------------
-// Phase 2 will handle 401 responses here and trigger re-authentication.
-// For now this is a documented placeholder.
+// On a 401 response the backend's InMemoryTokenRepository has been cleared
+// (e.g. server restart).  Dispatch a custom event so AuthProvider can clear
+// local state and return the user to SetupScreen without importing React here.
 apiClient.interceptors.response.use(
   (response) => response,
   (error: unknown) => {
-    // TODO (Phase 2): detect 401 and redirect to setup screen.
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'response' in error &&
+      (error as { response?: { status?: number } }).response?.status === 401
+    ) {
+      window.dispatchEvent(new CustomEvent('worky:401'))
+    }
     return Promise.reject(error)
   },
 )
