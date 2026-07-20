@@ -9,6 +9,7 @@
  *   • Detect the /auth/success redirect path and render AuthSuccessScreen.
  *   • Show a loading state while auth is being initialised from localStorage.
  *   • Own the useOutlookContext hook and pass its state as props to DashboardScreen.
+ *   • Own the useRecommendations hook and pass its state as props to DashboardScreen.
  *   • Render DashboardScreen when authenticated.
  *   • Render SetupScreen when not authenticated.
  *   • Pass the refresh callback and connector status up to WidgetShell via
@@ -18,9 +19,10 @@
  * PHASE EVOLUTION
  * ---------------
  * Phase 2: Auth-aware screen selection.
- * Phase 3 (current):
- *   Calls useOutlookContext and passes ConnectorResult data into DashboardScreen.
- *   Exposes refresh + connector status via OutlookStateContext for WidgetShell.
+ * Phase 3: Calls useOutlookContext and passes ConnectorResult data into DashboardScreen.
+ *          Exposes refresh + connector status via OutlookStateContext for WidgetShell.
+ * Phase 6 (current):
+ *   Calls useRecommendations and passes RecommendationSet into DashboardScreen.
  *
  * WHY NOT IN App.tsx
  * ------------------
@@ -28,8 +30,10 @@
  * All screen-selection logic and data orchestration lives here.
  */
 
+import { useCallback, useMemo } from 'react'
 import { useAuth } from '../hooks/useAuth.ts'
 import { useOutlookContext } from '../hooks/useOutlookContext.ts'
+import { useRecommendations } from '../hooks/useRecommendations.ts'
 import { OutlookStateContext } from '../context/outlookStateContext.ts'
 import AuthSuccessScreen from './setup/AuthSuccessScreen.tsx'
 import DashboardScreen from './dashboard/DashboardScreen.tsx'
@@ -43,14 +47,47 @@ import LoadingSpinner from './shared/LoadingSpinner.tsx'
 export default function ScreenManager() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth()
 
+  const userId = isAuthenticated ? user?.user_id : undefined
+
   const {
     result,
-    isLoading,
-    isRefreshing,
+    isLoading: outlookLoading,
+    isRefreshing: outlookRefreshing,
     status,
-    error,
-    refresh,
-  } = useOutlookContext(isAuthenticated ? user?.user_id : undefined)
+    error: outlookError,
+    refresh: refreshOutlook,
+  } = useOutlookContext(userId)
+
+  const {
+    data: recommendations,
+    isLoading: recsLoading,
+    isRefreshing: recsRefreshing,
+    error: recsError,
+    refresh: refreshRecs,
+  } = useRecommendations(userId)
+
+  // Combined refresh: refreshes both Outlook context and recommendations.
+  // Memoized so the OutlookStateContext value object reference is stable
+  // across renders that don't change the underlying refresh callbacks.
+  const handleRefresh = useCallback(() => {
+    refreshOutlook()
+    refreshRecs()
+  }, [refreshOutlook, refreshRecs])
+
+  const isRefreshing = outlookRefreshing || recsRefreshing
+
+  // Memoize the context value so OutlookStateContext consumers (WidgetShell)
+  // do not re-render on every ScreenManager state update — only when the
+  // relevant values actually change.
+  const outlookStateValue = useMemo(
+    () => ({
+      refresh: handleRefresh,
+      connectorStatus: status,
+      collectedAt: result?.collected_at ?? null,
+      isRefreshing,
+    }),
+    [handleRefresh, status, result, isRefreshing],
+  )
 
   // The backend redirects to /auth/success after a successful OAuth login.
   if (window.location.pathname === '/auth/success') {
@@ -69,19 +106,15 @@ export default function ScreenManager() {
 
   if (isAuthenticated) {
     return (
-      <OutlookStateContext.Provider
-        value={{
-          refresh,
-          connectorStatus: status,
-          collectedAt: result?.collected_at ?? null,
-          isRefreshing,
-        }}
-      >
+      <OutlookStateContext.Provider value={outlookStateValue}>
         <DashboardScreen
           result={result}
-          isLoading={isLoading}
+          isLoading={outlookLoading}
           isRefreshing={isRefreshing}
-          error={error}
+          error={outlookError}
+          recommendations={recommendations?.recommendations ?? null}
+          recsLoading={recsLoading}
+          recsError={recsError}
         />
       </OutlookStateContext.Provider>
     )
