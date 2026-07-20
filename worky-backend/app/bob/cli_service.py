@@ -205,13 +205,17 @@ def _parse_recommendations(raw_output: str, request_id: str) -> list[Recommendat
     text = raw_output.strip()
 
     # Strip markdown code fences that Bob adds regardless of instructions.
+    # Handles both ```json\n...\n``` and ```\n...\n``` (no language tag).
     if text.startswith("```"):
-        parts = text.split("```", 2)
-        # parts[1] starts with optional language tag + newline
-        inner = parts[1]
-        if "\n" in inner:
-            inner = inner[inner.index("\n") + 1:]
-        text = inner.strip()
+        # Remove the opening fence line (```json or ``` or ```python etc.)
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+        # Remove the closing ``` fence (last line)
+        last_fence = text.rfind("```")
+        if last_fence != -1:
+            text = text[:last_fence]
+        text = text.strip()
 
     try:
         parsed = json.loads(text)

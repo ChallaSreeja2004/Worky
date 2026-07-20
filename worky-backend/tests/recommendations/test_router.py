@@ -3,13 +3,14 @@ tests/recommendations/test_router.py
 ======================================
 Router-level tests for GET /api/v1/recommendations.
 
-All BobService / RecommendationService calls are replaced with mocks —
-no real IBM Bob API is called and no network I/O occurs.
+All service calls are replaced with mocks — no real IBM Bob API is called,
+no real AuthService token lookups happen, and no real connectors run.
 
-The test client overrides FastAPI's dependency injection to inject a mock
-RecommendationService for each scenario.  This keeps each test focused on
-the router's HTTP contract: correct status codes, response shapes, and
-error mapping.
+The test client overrides FastAPI's dependency injection to inject mocks for
+all three injectable dependencies:
+  • get_recommendation_service  — replaced with a mock RecommendationService
+  • get_auth_service_dep        — replaced with a mock AuthService
+  • get_context_builder         — replaced with a mock ContextBuilder
 
 Coverage
 --------
@@ -22,6 +23,10 @@ Coverage
 
   Input validation
     • Omitting user_id query parameter → 422 (FastAPI schema validation)
+
+  Auth error mapping
+    • AuthUserNotFoundError raised by auth_service → 401
+    • AuthRefreshError raised by auth_service → 401 (token refresh failed)
 
   RecommendationError mapping
     • RecommendationError raised by the service → 422
@@ -41,6 +46,10 @@ Coverage
   Logging
     • INFO log is emitted on a successful call
     • user_id appears in the log output on success
+
+  Full pipeline
+    • WorkContext passed to generate() has user_id from query param
+    • WorkContext passed to generate() is built via ContextBuilder
 """
 
 from __future__ import annotations
@@ -51,6 +60,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth.service import AuthRefreshError, AuthUserNotFoundError
 from app.bob.models import Recommendation, RecommendationSet
 from app.bob.service import (
     BobConfigError,
@@ -60,7 +70,11 @@ from app.bob.service import (
     BobTimeoutError,
 )
 from app.context_builder.models import WorkContext
-from app.recommendations.dependencies import get_recommendation_service
+from app.recommendations.dependencies import (
+    get_auth_service_dep,
+    get_context_builder,
+    get_recommendation_service,
+)
 from app.recommendations.exceptions import RecommendationError
 from main import app
 
@@ -111,12 +125,55 @@ def make_rec_service(
     return service
 
 
-def make_client(rec_service: MagicMock) -> TestClient:
+def make_auth_service(
+    access_token: str = "test-access-token",
+    side_effect: Exception | None = None,
+) -> MagicMock:
     """
-    Build a TestClient with the given rec_service injected as a dependency
-    override.
+    Build a mock AuthService.
+
+    get_valid_token() returns access_token unless side_effect is given.
     """
+    auth = MagicMock()
+    if side_effect is not None:
+        auth.get_valid_token = AsyncMock(side_effect=side_effect)
+    else:
+        auth.get_valid_token = AsyncMock(return_value=access_token)
+    return auth
+
+
+def make_context_builder(user_id: str = "user-001") -> MagicMock:
+    """
+    Build a mock ContextBuilder.
+
+    build() returns a WorkContext with the given user_id and no active sources
+    (simulating a context where connectors ran but produced no data — still
+    a valid WorkContext that Bob can reason over).
+    """
+    builder = MagicMock()
+    builder.build = AsyncMock(return_value=WorkContext(user_id=user_id))
+    return builder
+
+
+def make_client(
+    rec_service: MagicMock,
+    auth_service: MagicMock | None = None,
+    context_builder: MagicMock | None = None,
+    user_id: str = "user-001",
+) -> TestClient:
+    """
+    Build a TestClient with all three injectable dependencies overridden.
+
+    Defaults:
+      auth_service    — returns "test-access-token" for get_valid_token()
+      context_builder — returns WorkContext(user_id=user_id) for build()
+    """
+    _auth = auth_service or make_auth_service()
+    _builder = context_builder or make_context_builder(user_id=user_id)
+
     app.dependency_overrides[get_recommendation_service] = lambda: rec_service
+    app.dependency_overrides[get_auth_service_dep] = lambda: _auth
+    app.dependency_overrides[get_context_builder] = lambda: _builder
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -154,7 +211,7 @@ class TestGetRecommendationsSuccess:
     def test_success_response_user_id_preserved(self):
         """user_id in the response body matches the service return value."""
         svc = make_rec_service(return_value=make_recommendation_set(user_id="uid-42"))
-        client = make_client(svc)
+        client = make_client(svc, user_id="uid-42")
         body = client.get("/api/v1/recommendations/?user_id=uid-42").json()
         assert body["user_id"] == "uid-42"
 
@@ -178,7 +235,7 @@ class TestGetRecommendationsSuccess:
     def test_success_generate_called_with_correct_user_id(self):
         """generate() receives a WorkContext whose user_id matches the query param."""
         svc = make_rec_service()
-        client = make_client(svc)
+        client = make_client(svc, user_id="check-user-99")
         client.get("/api/v1/recommendations/?user_id=check-user-99")
         call_args = svc.generate.call_args
         work_context: WorkContext = call_args[0][0]
@@ -360,7 +417,22 @@ class TestDependencyInjection:
     def test_different_users_call_generate_with_their_user_id(self):
         """Two consecutive calls pass the correct user_id each time."""
         svc = make_rec_service()
-        client = make_client(svc)
+
+        # Use a context builder that echoes whatever user_id build() receives.
+        call_count = 0
+        user_ids_seen = []
+
+        async def dynamic_build(user_id, connectors, access_token):
+            user_ids_seen.append(user_id)
+            return WorkContext(user_id=user_id)
+
+        builder = MagicMock()
+        builder.build = dynamic_build
+
+        app.dependency_overrides[get_recommendation_service] = lambda: svc
+        app.dependency_overrides[get_auth_service_dep] = lambda: make_auth_service()
+        app.dependency_overrides[get_context_builder] = lambda: builder
+        client = TestClient(app, raise_server_exceptions=False)
 
         client.get("/api/v1/recommendations/?user_id=alice")
         client.get("/api/v1/recommendations/?user_id=bob")
@@ -390,7 +462,7 @@ class TestLogging:
     def test_user_id_in_log_on_success(self, caplog):
         """The user_id appears in at least one INFO log record on success."""
         svc = make_rec_service()
-        client = make_client(svc)
+        client = make_client(svc, user_id="log-user-007")
         with caplog.at_level(logging.INFO, logger="app.recommendations.router"):
             client.get("/api/v1/recommendations/?user_id=log-user-007")
         messages = " ".join(r.getMessage() for r in caplog.records)
@@ -415,3 +487,166 @@ class TestLogging:
             client.get("/api/v1/recommendations/?user_id=user-001")
         error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(error_records) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Auth error mapping
+# ---------------------------------------------------------------------------
+
+class TestAuthErrorMapping:
+
+    def test_auth_user_not_found_returns_401(self):
+        """AuthUserNotFoundError raised by auth_service → HTTP 401."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthUserNotFoundError(
+                "No token found for user_id='user-001'. User must authenticate first."
+            )
+        )
+        client = make_client(svc, auth_service=auth)
+        response = client.get("/api/v1/recommendations/?user_id=user-001")
+        assert response.status_code == 401
+
+    def test_auth_user_not_found_detail_forwarded(self):
+        """401 response detail contains the AuthUserNotFoundError message."""
+        msg = "No token found for user_id='user-001'. User must authenticate first."
+        svc = make_rec_service()
+        auth = make_auth_service(side_effect=AuthUserNotFoundError(msg))
+        client = make_client(svc, auth_service=auth)
+        body = client.get("/api/v1/recommendations/?user_id=user-001").json()
+        assert msg in body["detail"]
+
+    def test_auth_failure_does_not_call_generate(self):
+        """generate() is never called when auth fails."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthUserNotFoundError("No token.")
+        )
+        client = make_client(svc, auth_service=auth)
+        client.get("/api/v1/recommendations/?user_id=user-001")
+        svc.generate.assert_not_called()
+
+    def test_auth_warning_logged_when_user_not_found(self, caplog):
+        """A WARNING is logged when the user has not authenticated."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthUserNotFoundError("No token.")
+        )
+        client = make_client(svc, auth_service=auth)
+        with caplog.at_level(logging.WARNING, logger="app.recommendations.router"):
+            client.get("/api/v1/recommendations/?user_id=user-001")
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) >= 1
+
+    def test_auth_refresh_error_returns_401(self):
+        """AuthRefreshError raised by auth_service → HTTP 401."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthRefreshError(
+                "Token refresh failed. Please log in again."
+            )
+        )
+        client = make_client(svc, auth_service=auth)
+        response = client.get("/api/v1/recommendations/?user_id=user-001")
+        assert response.status_code == 401
+
+    def test_auth_refresh_error_detail_forwarded(self):
+        """401 response detail contains the AuthRefreshError message."""
+        msg = "Token refresh failed. Please log in again."
+        svc = make_rec_service()
+        auth = make_auth_service(side_effect=AuthRefreshError(msg))
+        client = make_client(svc, auth_service=auth)
+        body = client.get("/api/v1/recommendations/?user_id=user-001").json()
+        assert msg in body["detail"]
+
+    def test_auth_refresh_error_does_not_call_generate(self):
+        """generate() is never called when a token refresh fails."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthRefreshError("Refresh token expired.")
+        )
+        client = make_client(svc, auth_service=auth)
+        client.get("/api/v1/recommendations/?user_id=user-001")
+        svc.generate.assert_not_called()
+
+    def test_auth_refresh_error_warning_logged(self, caplog):
+        """A WARNING is logged when a token refresh fails."""
+        svc = make_rec_service()
+        auth = make_auth_service(
+            side_effect=AuthRefreshError("Refresh token expired.")
+        )
+        client = make_client(svc, auth_service=auth)
+        with caplog.at_level(logging.WARNING, logger="app.recommendations.router"):
+            client.get("/api/v1/recommendations/?user_id=user-001")
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) >= 1
+
+
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline — WorkContext is built via ContextBuilder
+# ---------------------------------------------------------------------------
+
+class TestFullPipeline:
+
+    def test_work_context_user_id_matches_query_param(self):
+        """The WorkContext passed to generate() carries the query user_id."""
+        svc = make_rec_service()
+        client = make_client(svc, user_id="pipeline-user-42")
+        client.get("/api/v1/recommendations/?user_id=pipeline-user-42")
+        call_args = svc.generate.call_args
+        ctx: WorkContext = call_args[0][0]
+        assert ctx.user_id == "pipeline-user-42"
+
+    def test_context_builder_build_is_called(self):
+        """ContextBuilder.build() is called exactly once per request."""
+        svc = make_rec_service()
+        builder = make_context_builder()
+        client = make_client(svc, context_builder=builder)
+        client.get("/api/v1/recommendations/?user_id=user-001")
+        builder.build.assert_called_once()
+
+    def test_context_builder_receives_correct_user_id(self):
+        """ContextBuilder.build() is called with the request's user_id."""
+        svc = make_rec_service()
+        builder = make_context_builder(user_id="ctx-user-99")
+        client = make_client(svc, user_id="ctx-user-99", context_builder=builder)
+        client.get("/api/v1/recommendations/?user_id=ctx-user-99")
+        _, kwargs = builder.build.call_args
+        assert kwargs.get("user_id") == "ctx-user-99" or builder.build.call_args[0][0] == "ctx-user-99"
+
+    def test_work_context_from_builder_is_passed_to_generate(self):
+        """The WorkContext returned by ContextBuilder.build() is passed to generate()."""
+        svc = make_rec_service()
+        expected_ctx = WorkContext(user_id="user-001")
+        builder = MagicMock()
+        builder.build = AsyncMock(return_value=expected_ctx)
+        client = make_client(svc, context_builder=builder)
+        client.get("/api/v1/recommendations/?user_id=user-001")
+        svc.generate.assert_called_once_with(expected_ctx)
+
+    def test_auth_token_is_obtained_before_context_build(self):
+        """AuthService.get_valid_token() is called before ContextBuilder.build()."""
+        call_order = []
+        svc = make_rec_service()
+
+        auth = MagicMock()
+        async def auth_token(user_id):
+            call_order.append("auth")
+            return "tok"
+        auth.get_valid_token = auth_token
+
+        builder = MagicMock()
+        async def build_ctx(user_id, connectors, access_token):
+            call_order.append("build")
+            return WorkContext(user_id=user_id)
+        builder.build = build_ctx
+
+        app.dependency_overrides[get_recommendation_service] = lambda: svc
+        app.dependency_overrides[get_auth_service_dep] = lambda: auth
+        app.dependency_overrides[get_context_builder] = lambda: builder
+        client = TestClient(app, raise_server_exceptions=False)
+        client.get("/api/v1/recommendations/?user_id=user-001")
+
+        assert call_order == ["auth", "build"]
