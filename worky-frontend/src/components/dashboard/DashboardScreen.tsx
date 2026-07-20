@@ -3,63 +3,127 @@
  * ==============================================
  * Main widget view shown after the user has authenticated.
  *
- * Currently renders placeholder sections only — no data is fetched.
- * Phase 3 will replace each active section with live data from the
- * Outlook context endpoint (GET /api/v1/connectors/outlook/context).
+ * This component is presentation-only.  It receives pre-fetched data as
+ * props from ScreenManager and renders it.  It never calls useOutlookContext
+ * or any other hook directly — that is ScreenManager's responsibility.
  *
  * Section map
  * -----------
- * Upcoming Meetings  — Phase 3: data.calendar_events from ConnectorResult
- * Important Emails   — Phase 3: data.emails from ConnectorResult
- * Today's Priorities — future: IBM Bob recommendations (Phase 9+)
- * Blockers           — future: IBM Bob analysis (Phase 9+)
- * Learning Reminder  — future: IBM Bob recommendation (Phase 9+)
+ * Upcoming Meetings  — live: data.calendar_events from ConnectorResult
+ * Important Emails   — live: data.emails from ConnectorResult
+ * Today's Priorities — future: IBM Bob recommendations (Phase 6+)
+ * Blockers           — future: IBM Bob analysis (Phase 6+)
+ * Learning Reminder  — future: IBM Bob recommendation (Phase 6+)
+ *
+ * Props
+ * -----
+ * result       — ConnectorResult from useOutlookContext, or null before first fetch
+ * isLoading    — true while the first fetch is in flight (no data yet)
+ * isRefreshing — true while a refresh is in flight (stale data still shown)
+ * error        — network/unexpected error string, or null
  */
 
-import LoadingSpinner from '../shared/LoadingSpinner.tsx'
+import type { ConnectorResult } from '../../types/index.ts'
+import MeetingList from './MeetingList.tsx'
+import EmailList from './EmailList.tsx'
+import ErrorBanner from '../shared/ErrorBanner.tsx'
+import StatusBadge from '../shared/StatusBadge.tsx'
 
-interface PlaceholderSectionProps {
+interface DashboardScreenProps {
+  result: ConnectorResult | null
+  isLoading: boolean
+  isRefreshing: boolean
+  error: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Section wrapper — shared chrome for each data section
+// ---------------------------------------------------------------------------
+
+interface SectionProps {
   title: string
+  children: React.ReactNode
   comingSoon?: boolean
 }
 
-function PlaceholderSection({ title, comingSoon = false }: PlaceholderSectionProps) {
+function Section({ title, children, comingSoon = false }: SectionProps) {
   return (
-    <section className="px-4 pt-3 pb-2">
-      <div className="flex items-center justify-between mb-1.5">
-        <h3 className="text-[11px] font-medium text-gray-400">
-          {title}
-        </h3>
+    <section className="pt-3 pb-2">
+      <div className="flex items-center justify-between px-4 mb-1.5">
+        <p className="text-[11px] font-medium text-gray-400">{title}</p>
         {comingSoon && (
           <span className="text-[10px] text-gray-300">Coming soon</span>
         )}
       </div>
-
-      <div className="border-b border-gray-50 pb-2">
-        {comingSoon ? (
-          <p className="text-xs text-gray-300">Not yet connected.</p>
-        ) : (
-          <LoadingSpinner />
-        )}
+      <div className="border-b border-gray-50">
+        {children}
       </div>
     </section>
   )
 }
 
-export default function DashboardScreen() {
+// ---------------------------------------------------------------------------
+// DashboardScreen
+// ---------------------------------------------------------------------------
+
+export default function DashboardScreen({
+  result,
+  isLoading,
+  isRefreshing,
+  error,
+}: DashboardScreenProps) {
+  const events = result?.data?.calendar_events ?? []
+  const emails = result?.data?.emails ?? []
+
   return (
     <div className="flex flex-col py-1">
 
-      {/* Active in Phase 3 — will show live calendar events */}
-      <PlaceholderSection title="Upcoming Meetings" />
+      {/* Network or unexpected error banner — shown above all sections */}
+      {error && !isLoading && (
+        <div className="px-4 pt-3 pb-1">
+          <ErrorBanner message="Could not load Outlook data. Check your connection and try refreshing." />
+        </div>
+      )}
 
-      {/* Active in Phase 3 — will show live email data */}
-      <PlaceholderSection title="Important Emails" />
+      {/* Connector partial/failed status banner */}
+      {result && result.status !== 'success' && (
+        <div className="px-4 pt-2 pb-1 flex items-center gap-2">
+          <StatusBadge status={result.status} />
+          {result.errors.length > 0 && (
+            <span className="text-xs text-gray-500 truncate">{result.errors[0]}</span>
+          )}
+        </div>
+      )}
 
-      {/* Future phases — IBM Bob powered */}
-      <PlaceholderSection title="Today's Priorities" comingSoon />
-      <PlaceholderSection title="Blockers"           comingSoon />
-      <PlaceholderSection title="Learning Reminder"  comingSoon />
+      {/* Refreshing indicator — subtle, non-disruptive */}
+      {isRefreshing && (
+        <div className="px-4 pt-1 pb-0">
+          <p className="text-[10px] text-gray-400">Refreshing…</p>
+        </div>
+      )}
+
+      {/* Upcoming Meetings */}
+      <Section title="upcoming meetings">
+        <MeetingList events={events} isLoading={isLoading} />
+      </Section>
+
+      {/* Important Emails */}
+      <Section title="important emails">
+        <EmailList emails={emails} isLoading={isLoading} />
+      </Section>
+
+      {/* Future IBM Bob sections — placeholders */}
+      <Section title="today's priorities" comingSoon>
+        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
+      </Section>
+
+      <Section title="blockers" comingSoon>
+        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
+      </Section>
+
+      <Section title="learning reminder" comingSoon>
+        <p className="px-4 py-2 text-xs text-gray-300">Not yet connected.</p>
+      </Section>
 
     </div>
   )
