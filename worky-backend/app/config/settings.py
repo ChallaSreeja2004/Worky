@@ -8,6 +8,7 @@ This module owns ONLY application-level concerns:
   • Logging level
   • Token encryption key (shared across all connectors)
   • API versioning prefix
+  • Frontend URL — optional redirect target after OAuth callback
 
 Connector-specific settings (OAuth scopes, API base URLs, client IDs) live in
 each connector's own settings module, e.g.
@@ -53,6 +54,27 @@ class AppSettings(BaseSettings):
     All routes are mounted under this prefix.
     Versioning from day one avoids a painful migration when the desktop
     widget v1 and a backend v2 must coexist in the field.
+    """
+
+    # ------------------------------------------------------------------
+    # Frontend — optional redirect target after OAuth callback
+    # ------------------------------------------------------------------
+    frontend_url: str | None = None
+    """
+    Base URL of the React / desktop widget frontend.
+
+    When set, the OAuth callback endpoint redirects the browser to
+        {frontend_url}/auth/success?user_id=...&display_name=...&email=...
+    instead of returning the AuthorizationResponse as JSON.
+
+    When not set (the default), the callback returns JSON exactly as
+    before — preserving full backward compatibility for API clients,
+    automated tests, and curl-based development workflows.
+
+    Set this to the Vite dev server origin during frontend development:
+        FRONTEND_URL=http://localhost:3000
+
+    Must NOT have a trailing slash.
     """
 
     # ------------------------------------------------------------------

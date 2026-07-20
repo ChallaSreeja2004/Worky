@@ -1,0 +1,9 @@
+# src/hooks/
+#
+# React hooks live here.
+#
+# Phase 2 will add:
+#   useAuth.ts        — manages authentication state and the OAuth callback
+#
+# Phase 3 will add:
+#   useOutlookContext.ts  — fetches and caches the Outlook ConnectorResult
