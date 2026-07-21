@@ -14,6 +14,10 @@ injection system and the auth layer.  They ensure:
   • Every request that needs an AuthService gets the same shared repository
     instance (via module-level singleton), keeping tokens consistent across
     requests within a single process.
+  • Every request that needs an AuthService gets the SAME AuthService instance
+    (via _get_shared_auth_service), so the in-process PKCE verifier map
+    (_pkce_store) populated during /auth/login is still present when
+    /auth/callback arrives on a subsequent request.
 
 IMPORT RULES
 ------------
@@ -49,6 +53,25 @@ def _get_shared_token_repository() -> InMemoryTokenRepository:
     return InMemoryTokenRepository()
 
 
+@lru_cache
+def _get_shared_auth_service() -> AuthService:
+    """
+    Return the process-wide singleton AuthService.
+
+    AuthService holds an in-process PKCE verifier map (_pkce_store) that is
+    populated by get_authorization_url() during /auth/login and consumed by
+    exchange_code_for_tokens() during /auth/callback.  Because these two
+    endpoints are handled by different HTTP requests, they must share the
+    same AuthService instance — otherwise _pkce_store is empty on the
+    callback request and state validation fails with "Unknown or expired
+    state parameter."
+
+    lru_cache (with no arguments) returns the same instance on every call
+    within the same process, matching the lifetime of the PKCE verifier.
+    """
+    return AuthService(token_repository=_get_shared_token_repository())
+
+
 def get_token_repository() -> TokenRepository:
     """
     FastAPI dependency provider for TokenRepository.
@@ -65,12 +88,12 @@ def get_auth_service() -> AuthService:
     """
     FastAPI dependency provider for AuthService.
 
-    Constructs an AuthService wired to the shared token repository.
-    Called on every request that declares AuthService as a dependency.
+    Returns the process-wide singleton AuthService so that the PKCE verifier
+    written during /auth/login is still readable during /auth/callback.
 
     Usage in a router:
         @router.get("/example")
         async def example(auth: AuthService = Depends(get_auth_service)):
             ...
     """
-    return AuthService(token_repository=_get_shared_token_repository())
+    return _get_shared_auth_service()

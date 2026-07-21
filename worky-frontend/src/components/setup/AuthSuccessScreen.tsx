@@ -36,32 +36,58 @@
  *   If user_id is missing the redirect is treated as invalid.
  *   The component calls logout() to ensure a clean state and shows
  *   SetupScreen (via the ScreenManager fallback) rather than crashing.
+ *
+ * STRICT MODE / DOUBLE-INVOCATION NOTE
+ * -------------------------------------
+ *   React.StrictMode in development intentionally mounts, unmounts, and
+ *   remounts every component to surface side-effect bugs.  This causes
+ *   useEffect to fire twice.
+ *
+ *   The original code called window.history.replaceState(null, '', '/') on
+ *   the first run, which wiped the query string from window.location.search.
+ *   On the second run, parseAuthSuccessParams() read an empty search string,
+ *   returned null, and the else-branch called logout() — undoing the login
+ *   that had just succeeded.
+ *
+ *   The fix: parse the params exactly once, before replaceState is called,
+ *   and guard the effect body with a ref so the auth-mutating logic (login /
+ *   logout) executes only on the first invocation regardless of StrictMode
+ *   double-firing or any future remount.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAuth } from '../../hooks/useAuth.ts'
 import { parseAuthSuccessParams } from '../../services/authService.ts'
 
 export default function AuthSuccessScreen() {
   const { login, logout } = useAuth()
 
-  useEffect(() => {
-    const user = parseAuthSuccessParams()
+  // Parse the query params immediately at render time, before any effect
+  // runs or replaceState cleans the URL.  This snapshot is stable across
+  // StrictMode double-invocations because the URL only changes inside the
+  // effect — and only after the snapshot has already been taken.
+  const userSnapshot = parseAuthSuccessParams()
 
-    if (user) {
-      login(user)
-      // Replace the /auth/success URL with the root path so that a manual
-      // page refresh lands at '/' (SetupScreen or DashboardScreen based on
-      // stored auth) rather than re-running this callback with stale params.
-      window.history.replaceState(null, '', '/')
+  // Guard: ensure the auth mutation (login/logout) and URL cleanup happen
+  // exactly once even when StrictMode mounts this component twice.
+  const committed = useRef(false)
+
+  useEffect(() => {
+    if (committed.current) return
+    committed.current = true
+
+    if (userSnapshot) {
+      login(userSnapshot)
     } else {
       // Params were missing or malformed — clear any partial auth state
       // and fall back to SetupScreen cleanly.
       logout()
-      window.history.replaceState(null, '', '/')
     }
-    // This effect runs exactly once on mount.
-  }, [login, logout])
+
+    // Clean the /auth/success URL from history after committing auth state.
+    // A manual page refresh will now land at '/' and hydrate from localStorage.
+    window.history.replaceState(null, '', '/')
+  }, [login, logout, userSnapshot])
 
   // Render nothing. ScreenManager will switch away from this screen
   // immediately once login() updates AuthContext.

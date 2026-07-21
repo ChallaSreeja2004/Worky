@@ -54,10 +54,16 @@ from app.connectors.outlook.settings import OutlookSettings
 def make_service(
     repo: InMemoryTokenRepository | None = None,
     encryption_key: str | None = None,
+    client_secret: str = "test-client-secret",
 ) -> AuthService:
     """
     Build an AuthService wired to a fresh InMemoryTokenRepository and
     a test-only Fernet key, without touching real environment variables.
+
+    client_secret defaults to a non-empty sentinel so tests that only care
+    about PKCE / state / encryption do not need to specify it explicitly.
+    The value is also plumbed into OutlookSettings so the validator does not
+    reject a missing secret during test construction.
     """
     if repo is None:
         repo = InMemoryTokenRepository()
@@ -68,6 +74,7 @@ def make_service(
         outlook_client_id="test-client-id",
         outlook_tenant_id="test-tenant-id",
         outlook_redirect_uri="http://localhost:8000/api/v1/auth/callback",
+        outlook_client_secret=client_secret,
     )
 
     with (
@@ -83,7 +90,7 @@ def make_service(
 
 def make_token_response(user_oid: str = "user-oid-001") -> dict:
     """
-    Build a mock Microsoft token response with an id_token JWT.
+    Build a mock Microsoft token response WITH an id_token JWT.
 
     The id_token is a valid (but unsigned) JWT containing the user's identity.
     """
@@ -107,6 +114,41 @@ def make_token_response(user_oid: str = "user-oid-001") -> dict:
         "expires_in": 3600,
         "token_type": "Bearer",
         "id_token": id_token,
+    }
+
+
+def make_token_response_no_id_token() -> dict:
+    """
+    Build a mock Microsoft token response WITHOUT an id_token.
+
+    Simulates the case where OIDC scopes were not requested, the tenant
+    policy strips the id_token, or the token endpoint simply omits it.
+    AuthService must fall back to Graph /me for identity in this case.
+    """
+    return {
+        "access_token": "test_access_token",
+        "refresh_token": "test_refresh_token",
+        "expires_in": 3600,
+        "token_type": "Bearer",
+        # id_token intentionally absent
+    }
+
+
+GRAPH_ME_URL = "https://graph.microsoft.com/v1.0/me"
+
+
+def make_graph_me_response(
+    user_id: str = "graph-user-001",
+    display_name: str = "Graph User",
+    mail: str | None = "graph@example.com",
+    user_principal_name: str = "graph@example.com",
+) -> dict:
+    """Build a minimal Graph /me response."""
+    return {
+        "id": user_id,
+        "displayName": display_name,
+        "mail": mail,
+        "userPrincipalName": user_principal_name,
     }
 
 
@@ -323,6 +365,131 @@ class TestExchangeCodeForTokensFailures:
 # get_valid_token tests
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Graph /me fallback tests
+# ---------------------------------------------------------------------------
+
+class TestGraphMeFallback:
+    """
+    When the token response contains no id_token (or id_token yields
+    "unknown" user_id), exchange_code_for_tokens() must call Graph /me
+    and use the response for user_id, display_name, and email.
+    """
+
+    @respx.mock
+    async def test_identity_from_graph_me_when_id_token_absent(self):
+        """
+        No id_token in token response → Graph /me is called and its fields
+        are used for the AuthorizationResponse.
+        """
+        service = make_service()
+        _, state = service.get_authorization_url()
+
+        respx.post(service._test_outlook.token_url).mock(
+            return_value=Response(200, json=make_token_response_no_id_token())
+        )
+        respx.get(GRAPH_ME_URL).mock(
+            return_value=Response(200, json=make_graph_me_response(
+                user_id="graph-user-001",
+                display_name="Graph User",
+                mail="graph@example.com",
+            ))
+        )
+
+        auth_response = await service.exchange_code_for_tokens(
+            code="test_code", state=state
+        )
+
+        assert auth_response.user_id == "graph-user-001"
+        assert auth_response.display_name == "Graph User"
+        assert auth_response.email == "graph@example.com"
+        assert auth_response.access_token == "test_access_token"
+
+    @respx.mock
+    async def test_graph_me_uses_user_principal_name_when_mail_is_null(self):
+        """
+        Graph /me.mail is null for many work/school accounts.
+        The fallback must use userPrincipalName instead.
+        """
+        service = make_service()
+        _, state = service.get_authorization_url()
+
+        respx.post(service._test_outlook.token_url).mock(
+            return_value=Response(200, json=make_token_response_no_id_token())
+        )
+        respx.get(GRAPH_ME_URL).mock(
+            return_value=Response(200, json=make_graph_me_response(
+                mail=None,  # null in Graph response
+                user_principal_name="upn@corp.example.com",
+            ))
+        )
+
+        auth_response = await service.exchange_code_for_tokens(
+            code="test_code", state=state
+        )
+
+        assert auth_response.email == "upn@corp.example.com"
+
+    @respx.mock
+    async def test_id_token_present_does_not_call_graph_me(self):
+        """
+        When id_token is present and yields a valid user_id, Graph /me must
+        NOT be called (no extra HTTP round-trip on the happy path).
+        """
+        service = make_service()
+        _, state = service.get_authorization_url()
+
+        respx.post(service._test_outlook.token_url).mock(
+            return_value=Response(200, json=make_token_response())
+        )
+        # Register the Graph route but do NOT mock a response — if it is
+        # called, respx will raise and fail the test.
+        graph_route = respx.get(GRAPH_ME_URL)
+
+        auth_response = await service.exchange_code_for_tokens(
+            code="test_code", state=state
+        )
+
+        # id_token path must win
+        assert auth_response.user_id == "user-oid-001"
+        assert auth_response.display_name == "Test User"
+        # Graph /me must not have been called
+        assert not graph_route.called
+
+    @respx.mock
+    async def test_graph_me_network_failure_returns_gracefully(self):
+        """
+        If Graph /me fails (network error), exchange_code_for_tokens() must
+        still return an AuthorizationResponse — with "unknown" identity fields
+        rather than raising an exception.  The tokens are still stored so the
+        user is not locked out.
+        """
+        import httpx as _httpx
+
+        service = make_service()
+        _, state = service.get_authorization_url()
+
+        respx.post(service._test_outlook.token_url).mock(
+            return_value=Response(200, json=make_token_response_no_id_token())
+        )
+        respx.get(GRAPH_ME_URL).mock(
+            side_effect=_httpx.ConnectError("connection refused")
+        )
+
+        auth_response = await service.exchange_code_for_tokens(
+            code="test_code", state=state
+        )
+
+        # Should not raise; identity fields degrade gracefully
+        assert auth_response.user_id == "unknown"
+        assert auth_response.display_name == ""
+        assert auth_response.email == ""
+        # Access token must still be returned
+        assert auth_response.access_token == "test_access_token"
+
+
+
 class TestGetValidToken:
 
     async def test_returns_access_token_when_not_expired(self):
@@ -491,6 +658,91 @@ class TestEncryption:
         # But both decrypt to the same plaintext
         assert service._decrypt(encrypted1) == plaintext
         assert service._decrypt(encrypted2) == plaintext
+
+
+# ---------------------------------------------------------------------------
+# client_secret injection tests
+# ---------------------------------------------------------------------------
+
+class TestClientSecretInjection:
+    """
+    Verify that client_secret is included in both the authorization-code
+    exchange payload and the refresh-token payload sent to Microsoft.
+
+    This covers the AADSTS7000218 regression: Azure AD confidential-client
+    apps require client_secret (or client_assertion) in every token request.
+    """
+
+    @respx.mock
+    async def test_client_secret_in_code_exchange_payload(self):
+        """client_secret must appear in the authorization-code exchange POST body."""
+        service = make_service(client_secret="super-secret-value")
+        _, state = service.get_authorization_url()
+
+        captured: list[dict] = []
+
+        def capture_and_respond(request, route):
+            import urllib.parse
+            body = dict(urllib.parse.parse_qsl(request.content.decode()))
+            captured.append(body)
+            return Response(200, json=make_token_response())
+
+        respx.post(service._test_outlook.token_url).mock(side_effect=capture_and_respond)
+
+        await service.exchange_code_for_tokens(code="test_code", state=state)
+
+        assert len(captured) == 1
+        assert captured[0]["client_secret"] == "super-secret-value"
+        assert captured[0]["grant_type"] == "authorization_code"
+        # PKCE verifier must still be present
+        assert "code_verifier" in captured[0]
+
+    @respx.mock
+    async def test_client_secret_in_refresh_payload(self):
+        """client_secret must appear in the refresh-token POST body."""
+        from cryptography.fernet import Fernet as _Fernet
+
+        encryption_key = _Fernet.generate_key().decode()
+        repo = InMemoryTokenRepository()
+        service = make_service(
+            repo=repo,
+            encryption_key=encryption_key,
+            client_secret="super-secret-value",
+        )
+
+        token_data = TokenData(
+            user_id="user-oid-001",
+            access_token="old_token",
+            refresh_token=service._encrypt("refresh_token_placeholder"),
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        await repo.save(token_data)
+
+        captured: list[dict] = []
+
+        def capture_and_respond(request, route):
+            import urllib.parse
+            body = dict(urllib.parse.parse_qsl(request.content.decode()))
+            captured.append(body)
+            return Response(
+                200,
+                json={
+                    "access_token": "new_access_token",
+                    "refresh_token": "new_refresh_token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            )
+
+        respx.post(service._test_outlook.token_url).mock(side_effect=capture_and_respond)
+
+        await service.get_valid_token("user-oid-001")
+
+        assert len(captured) == 1
+        assert captured[0]["client_secret"] == "super-secret-value"
+        assert captured[0]["grant_type"] == "refresh_token"
+
+
 
 
 # ---------------------------------------------------------------------------

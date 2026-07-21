@@ -218,8 +218,9 @@ class TestNormalizeEvent:
         event = normalizer._normalize_event(RAW_EVENT)
         assert event.id == "evt-001"
         assert event.subject == "Sprint planning"
-        assert event.start == "2024-06-10T09:00:00.0000000"
-        assert event.end == "2024-06-10T10:00:00.0000000"
+        assert event.start == "2024-06-10T09:00:00.000Z"
+        assert event.end == "2024-06-10T10:00:00.000Z"
+        assert event.start_timezone == "UTC"
         assert event.location == "Room A"
         assert event.organizer_name == "Bob"
         assert event.organizer_email == "bob@example.com"

@@ -52,6 +52,8 @@ It must NOT import from:
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 from datetime import date, datetime, timezone
 from typing import Any
@@ -100,6 +102,14 @@ class GraphAPIClient:
         self._headers: dict[str, str] = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
+            # Request UTC datetimes from Graph calendarView.
+            # Without this header Graph returns times in the calendar's
+            # configured timezone (e.g. "India Standard Time") as a bare
+            # datetime string with no UTC offset — which JavaScript's
+            # Date constructor treats as local time, breaking epoch
+            # comparisons in non-UTC browsers.  "UTC" guarantees the Z
+            # suffix so new Date() parses the epoch correctly everywhere.
+            "Prefer": 'outlook.timezone="UTC"',
         }
 
     # ------------------------------------------------------------------
@@ -185,8 +195,15 @@ class GraphAPIClient:
                 ?$filter=isRead eq false or importance eq 'high'
                 &$select=id,subject,from,receivedDateTime,
                          isRead,importance,bodyPreview,hasAttachments
-                &$orderby=receivedDateTime desc
                 &$top=25
+
+        Note: ``$orderby`` is intentionally omitted when ``$filter`` is present.
+        Combining ``$filter`` and ``$orderby`` on ``/me/messages`` is not
+        supported by personal Outlook.com (MSA) mailboxes and returns 501 or
+        400.  The result set is already sorted by ``receivedDateTime desc``
+        by default for Outlook.com; Exchange Online callers may see a different
+        default sort order, but all callers use ``receivedDateTime`` from each
+        message object anyway — explicit ordering is not required.
 
         Required scope: Mail.Read
 
@@ -203,7 +220,6 @@ class GraphAPIClient:
                     "id,subject,from,receivedDateTime,"
                     "isRead,importance,bodyPreview,hasAttachments"
                 ),
-                "$orderby": "receivedDateTime desc",
                 "$top": "25",
             },
         )
@@ -265,6 +281,11 @@ class GraphAPIClient:
         """
         url = f"{GRAPH_BASE_URL}{path}"
 
+        # Log outgoing request details once, before the retry loop.
+        # The bearer token is never logged in full — only structural metadata
+        # (length, first/last 10 chars) and JWT claims are emitted.
+        _log_outgoing_request(self._access_token, url)
+
         # The client is constructed once outside the retry loop so that the
         # underlying TCP connection pool is reused across attempts.  Creating
         # a new AsyncClient on every iteration would open a fresh connection
@@ -308,11 +329,8 @@ class GraphAPIClient:
                     return response.json()
 
                 if response.status_code in (401, 403):
-                    detail = _extract_error_message(response)
-                    logger.error(
-                        "GraphAPIClient: auth failure %d on %s — %s",
-                        response.status_code, path, detail,
-                    )
+                    _log_graph_auth_failure(response, path, url)
+                    detail = _extract_error_detail(response)
                     raise GraphAuthError(
                         f"Graph API returned {response.status_code} on {path!r}: "
                         f"{detail}"
@@ -335,7 +353,7 @@ class GraphAPIClient:
                     )
 
                 # Any other non-2xx response — fail immediately, no retry.
-                detail = _extract_error_message(response)
+                detail = _extract_error_detail(response)
                 logger.error(
                     "GraphAPIClient: unexpected %d on %s — %s",
                     response.status_code, path, detail,
@@ -355,23 +373,303 @@ class GraphAPIClient:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _extract_error_message(response: httpx.Response) -> str:
+def _decode_jwt_claims(token: str) -> dict:
     """
-    Extract a human-readable error message from a Graph error response body.
+    Decode the payload of a JWT without verifying the signature.
+
+    Microsoft access tokens are JWTs (three dot-separated base64url segments).
+    We only need the payload claims for diagnostic logging — signature
+    verification is Microsoft's server-side responsibility.
+
+    Returns a dict of claims, or a dict with a single ``_error`` key if the
+    token is not a valid JWT.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {"_error": f"not a JWT — {len(parts)} segment(s)"}
+
+        # JWT base64url payload may omit padding — restore it.
+        payload_b64 = parts[1]
+        padded = payload_b64 + "=" * (4 - len(payload_b64) % 4)
+        payload_bytes = base64.urlsafe_b64decode(padded)
+        return json.loads(payload_bytes)
+    except Exception as exc:  # noqa: BLE001
+        return {"_error": f"decode failed: {exc}"}
+
+
+def _log_outgoing_request(access_token: str, url: str) -> None:
+    """
+    Log structural metadata about the outgoing Graph request.
+
+    Emitted once per ``_get()`` call, before the HTTP request is sent.
+    Used to confirm:
+      • The Authorization header carries "Bearer <token>" (not a raw secret)
+      • The token is a well-formed JWT (not an encrypted refresh token or id_token)
+      • The JWT audience (``aud``) targets Microsoft Graph
+      • The JWT scopes (``scp``) include the expected delegated permissions
+      • The JWT has not already expired (``exp``)
+      • The token length is plausible (Graph access tokens are 1 500–2 000 chars)
+
+    Security: only token length and the first/last 10 characters are logged.
+    The full token value is NEVER written to logs.
+    """
+    token_len = len(access_token)
+
+    # First and last 10 characters give enough entropy to confirm whether the
+    # same token is reused across requests without exposing the full value.
+    if token_len >= 20:
+        token_preview = f"{access_token[:10]}...{access_token[-10:]}"
+    elif token_len > 0:
+        token_preview = f"{access_token[:5]}...<{token_len} chars total>"
+    else:
+        token_preview = "<empty>"
+
+    # Determine the authorization scheme (should always be "Bearer").
+    scheme = "Bearer" if access_token else "<missing>"
+
+    logger.info(
+        "GraphAPIClient: outgoing request\n"
+        "  url             : %s\n"
+        "  auth scheme     : %s <redacted>\n"
+        "  token length    : %d chars\n"
+        "  token preview   : %s",
+        url, scheme, token_len, token_preview,
+    )
+
+    # Decode and log the JWT payload claims.  This is the most reliable way
+    # to confirm exactly which token is being sent and whether it is valid
+    # for Graph (correct audience, unexpired, correct scopes).
+    claims = _decode_jwt_claims(access_token)
+
+    if "_error" in claims:
+        logger.error(
+            "GraphAPIClient: token is NOT a valid JWT — %s\n"
+            "  Likely cause: the encrypted refresh_token or the raw client_secret\n"
+            "  is being used instead of the access_token.",
+            claims["_error"],
+        )
+        return
+
+    # Extract the diagnostic claims.
+    aud  = claims.get("aud",  "<missing>")
+    iss  = claims.get("iss",  "<missing>")
+    scp  = claims.get("scp",  claims.get("roles", "<missing>"))  # delegated vs app-only
+    tid  = claims.get("tid",  "<missing>")
+    upn  = claims.get("upn",  claims.get("preferred_username", "<missing>"))
+    nbf  = claims.get("nbf",  None)
+    exp  = claims.get("exp",  None)
+
+    # Convert numeric epoch timestamps to readable UTC strings.
+    def _ts(epoch: int | None) -> str:
+        if epoch is None:
+            return "<missing>"
+        try:
+            return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+        except Exception:  # noqa: BLE001
+            return str(epoch)
+
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    is_expired = (exp is not None) and (now_epoch >= exp)
+    expiry_note = " *** EXPIRED ***" if is_expired else ""
+
+    # Graph access tokens must have aud == "https://graph.microsoft.com" or
+    # "00000003-0000-0000-c000-000000000000" (Graph's app ID).
+    graph_audiences = {
+        "https://graph.microsoft.com",
+        "00000003-0000-0000-c000-000000000000",
+    }
+    wrong_audience = str(aud) not in graph_audiences
+
+    logger.info(
+        "GraphAPIClient: JWT claims\n"
+        "  aud  : %s%s\n"
+        "  iss  : %s\n"
+        "  scp  : %s\n"
+        "  tid  : %s\n"
+        "  upn  : %s\n"
+        "  nbf  : %s\n"
+        "  exp  : %s%s",
+        aud,
+        "  *** WRONG AUDIENCE — not a Graph token ***" if wrong_audience else "",
+        iss,
+        scp,
+        tid,
+        upn,
+        _ts(nbf),
+        _ts(exp),
+        expiry_note,
+    )
+
+    if wrong_audience:
+        logger.error(
+            "GraphAPIClient: token audience '%s' is not Microsoft Graph.\n"
+            "  Expected: 'https://graph.microsoft.com' or "
+            "'00000003-0000-0000-c000-000000000000'.\n"
+            "  This token cannot be used to call Graph endpoints.\n"
+            "  Root cause candidates:\n"
+            "    1. The scope list sent to /authorize did not include a Graph\n"
+            "       delegated scope (e.g. 'User.Read'). OIDC-only scopes\n"
+            "       (openid/profile/email) produce tokens for the OIDC audience,\n"
+            "       not for Graph.\n"
+            "    2. The id_token (not the access_token) is being stored or\n"
+            "       retrieved from the repository.",
+            aud,
+        )
+
+    if is_expired:
+        logger.error(
+            "GraphAPIClient: token expired at %s (now %s).\n"
+            "  AuthService.get_valid_token() should have refreshed this token.\n"
+            "  Check that the system clock is not skewed and that the token\n"
+            "  expiry buffer (TOKEN_REFRESH_BUFFER_MINUTES) is applied correctly.",
+            _ts(exp),
+            _ts(now_epoch),
+        )
+
+
+def _extract_error_detail(response: httpx.Response) -> str:
+    """
+    Return a single-line summary of a Graph error response for use in
+    exception messages.
 
     Graph error responses follow the schema:
         {"error": {"code": "...", "message": "..."}}
 
-    Falls back to ``response.text[:200]`` in two cases:
-      • The body cannot be parsed as JSON.
-      • The ``message`` field is absent or is an empty string.
+    Returns ``"<code>: <message>"`` when both fields are present, falls back
+    to ``"<code>"`` if message is absent, and falls back to
+    ``response.text[:300]`` when the body cannot be parsed as JSON.
     """
     try:
         body = response.json()
         error = body.get("error", {})
-        return error.get("message") or response.text[:200]
+        code = error.get("code", "")
+        message = error.get("message", "")
+        if code and message:
+            return f"{code}: {message}"
+        if code:
+            return code
+        return message or response.text[:300]
     except Exception:  # noqa: BLE001
-        return response.text[:200]
+        return response.text[:300]
+
+
+def _log_graph_auth_failure(
+    response: httpx.Response,
+    path: str,
+    url: str,
+) -> None:
+    """
+    Emit a structured ERROR log entry for every 401/403 response from Graph.
+
+    Logs all fields needed to diagnose the exact rejection reason without
+    requiring a separate curl run:
+
+      - HTTP status code
+      - Full request URL (including query parameters)
+      - error.code   — e.g. "InvalidAuthenticationToken", "Forbidden"
+      - error.code innerError.code  — e.g. "InvalidAudience", "TokenExpired"
+      - error.message — human-readable explanation from Microsoft
+      - WWW-Authenticate header — Bearer realm, error, error_description
+      - First 1 000 chars of raw response body (for cases where JSON parse fails)
+
+    The Authorization header value is intentionally NOT logged — it contains
+    the raw bearer token and must never appear in log files.
+    """
+    status = response.status_code
+    www_auth = response.headers.get("WWW-Authenticate", "<not present>")
+
+    # Attempt to parse the Graph error body.
+    error_code = "<unknown>"
+    inner_code  = "<none>"
+    error_msg   = "<none>"
+    raw_body    = response.text[:1000]
+
+    try:
+        body = response.json()
+        err = body.get("error", {})
+        error_code = err.get("code", "<unknown>")
+        error_msg  = err.get("message", "<none>")
+        inner      = err.get("innerError", {})
+        inner_code = inner.get("code", "<none>")
+    except Exception:  # noqa: BLE001
+        pass  # raw_body already captured above
+
+    logger.error(
+        "GraphAPIClient: Graph auth failure\n"
+        "  status          : %d\n"
+        "  path            : %s\n"
+        "  full url        : %s\n"
+        "  error.code      : %s\n"
+        "  innerError.code : %s\n"
+        "  error.message   : %s\n"
+        "  WWW-Authenticate: %s\n"
+        "  raw body        : %s",
+        status, path, url,
+        error_code, inner_code, error_msg,
+        www_auth,
+        raw_body,
+    )
+
+    # Log a targeted hint for the most common root causes so the reader does
+    # not need to look up Microsoft's error code documentation.
+    _hint = _auth_failure_hint(error_code, inner_code, www_auth)
+    if _hint:
+        logger.error("GraphAPIClient: diagnosis hint — %s", _hint)
+
+
+def _auth_failure_hint(
+    error_code: str,
+    inner_code: str,
+    www_auth: str,
+) -> str:
+    """
+    Return a plain-English hint for the most common Graph 401/403 root causes.
+
+    Returns an empty string when no hint can be derived.
+    """
+    combined = f"{error_code} {inner_code} {www_auth}".lower()
+
+    if "invalidauthenticationtoken" in combined:
+        if "invalidaudience" in combined:
+            return (
+                "InvalidAudience: the access token was issued for a different "
+                "resource (audience). The token obtained via the /token endpoint "
+                "may target the wrong API — ensure the scope includes "
+                "'https://graph.microsoft.com/.default' or a delegated Graph scope "
+                "such as 'User.Read'. Tokens scoped only to 'openid/profile/email' "
+                "are OIDC tokens and cannot call Graph."
+            )
+        if "expiredtoken" in combined or "lifetime" in combined:
+            return (
+                "ExpiredToken: the access token has expired. "
+                "AuthService.get_valid_token() should refresh it automatically. "
+                "Check that the token stored after /auth/callback is not already "
+                "near expiry and that the system clock is not skewed."
+            )
+        return (
+            "InvalidAuthenticationToken: the token is malformed, truncated, or "
+            "was issued for a different tenant. Verify the token is the raw "
+            "access_token string returned by Microsoft (not the id_token or "
+            "the encrypted refresh_token)."
+        )
+
+    if "insufficient_claims" in combined or "insufficientscopes" in combined:
+        return (
+            "Insufficient scopes: the token was issued without the required "
+            "delegated permissions. Re-authenticate with the full scope list: "
+            "openid profile email User.Read Calendars.Read Mail.Read offline_access."
+        )
+
+    if "forbidden" in combined or error_code.lower() == "403":
+        return (
+            "Forbidden (403): the token is valid but the application does not "
+            "have the required Microsoft Graph permissions. Check the app "
+            "registration in Azure Portal → API permissions and ensure "
+            "Calendars.Read and Mail.Read are granted."
+        )
+
+    return ""
 
 
 # ---------------------------------------------------------------------------

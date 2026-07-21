@@ -1,7 +1,7 @@
 """
 app/connectors/outlook/router.py
 =================================
-Outlook connector router — debug/context endpoint.
+Outlook connector router — context endpoint.
 
 ENDPOINTS
 ---------
