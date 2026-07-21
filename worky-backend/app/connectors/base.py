@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Any
 
 # ConnectorResult is defined in this same package (models.py) and imported
 # here so that every connector only needs to import from connectors.base.
@@ -113,7 +114,7 @@ class BaseConnector(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def get_context(self, user_id: str, access_token: str) -> ConnectorResult:
+    async def get_context(self, **kwargs: Any) -> ConnectorResult:
         """
         Collect data from the enterprise application and return it as a
         normalised ConnectorResult.
@@ -122,21 +123,14 @@ class BaseConnector(ABC):
         must be fully async so the Context Builder can run all connectors
         concurrently via asyncio.gather().
 
-        Parameters
-        ----------
-        user_id : str
-            The Worky-internal user identifier.  Used to look up
-            user-specific configuration or preferences if needed.
-            The connector must NOT use this to fetch a token — the
-            caller (the router or Context Builder) is responsible for
-            supplying a valid access_token.
+        Each connector declares only the keyword arguments it actually needs:
 
-        access_token : str
-            A valid, unexpired bearer token scoped to this connector's
-            required permissions.  The connector uses this token to make
-            API calls on behalf of the user.  The connector must NOT
-            refresh tokens internally — token lifecycle is managed by
-            the AuthService layer.
+          OutlookConnector.get_context(user_id, access_token)
+              — needs a delegated OAuth token per user.
+
+          SlackConnector.get_context()
+              — bot token is baked into SlackAPIClient at construction time;
+                no per-call arguments are required.
 
         Returns
         -------
