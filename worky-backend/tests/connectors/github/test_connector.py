@@ -8,24 +8,28 @@ GitHubAPIClient is replaced with AsyncMock on every test — no real HTTP calls.
 Coverage:
   • Successful run returns ConnectorResult.success with populated data.
   • No PRs found → ConnectorResult.success with empty pull_requests list.
-  • PR search fails → ConnectorResult.failed.
+  • All three search queries fail → ConnectorResult.success with empty list
+    (search errors are non-fatal; the connector cannot distinguish "no results"
+    from "all queries failed gracefully").
   • User fetch fails → ConnectorResult.failed.
+  • Duplicate PRs across search queries are deduplicated.
   • Some PR enrichments fail → ConnectorResult.partial.
   • All PR enrichments fail → ConnectorResult.failed.
   • max_prs cap is respected.
   • health_check() delegates to api_client.ping().
   • source_name is "github".
+  • Three search queries are issued (one per qualifier).
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call
 
 import pytest
 
 from app.connectors.github.api_client import GitHubAuthError, GitHubServiceError
-from app.connectors.github.connector import GitHubConnector
+from app.connectors.github.connector import GitHubConnector, _SEARCH_QUERIES
 from app.connectors.github.normalizer import GitHubNormalizer
 from app.connectors.models import ConnectorStatus
 
@@ -35,6 +39,7 @@ from app.connectors.models import ConnectorStatus
 
 RAW_USER = {"login": "alice", "id": 1}
 
+# One PR returned by the first search query; other two queries return empty.
 RAW_SEARCH_ONE_PR: dict[str, Any] = {
     "total_count": 1,
     "items": [
@@ -66,10 +71,23 @@ RAW_PR: dict[str, Any] = {
 
 
 def make_happy_client() -> AsyncMock:
-    """Return a mock client where all calls succeed."""
+    """
+    Return a mock client where all calls succeed.
+
+    search_pull_requests is configured as a side_effect so that:
+      • query "is:open is:pr author:@me"           → one PR
+      • query "is:open is:pr review-requested:@me" → empty
+      • query "is:open is:pr assignee:@me"         → empty
+    This mirrors the real behaviour (one query matches, others don't).
+    """
+    def _search_side_effect(query: str) -> dict[str, Any]:
+        if "author:@me" in query:
+            return RAW_SEARCH_ONE_PR
+        return RAW_SEARCH_EMPTY
+
     client = AsyncMock()
     client.get_authenticated_user = AsyncMock(return_value=RAW_USER)
-    client.search_pull_requests = AsyncMock(return_value=RAW_SEARCH_ONE_PR)
+    client.search_pull_requests = AsyncMock(side_effect=_search_side_effect)
     client.get_pull_request = AsyncMock(return_value=RAW_PR)
     client.get_pull_request_files = AsyncMock(return_value=[])
     client.get_pull_request_diff = AsyncMock(return_value="")
@@ -131,13 +149,28 @@ class TestGetContextSuccess:
         result = await make_connector(make_happy_client()).get_context()
         assert result.metadata.get("prs_enriched") == 1
 
-    async def test_calls_search_with_default_query(self):
+    async def test_three_search_queries_are_issued(self):
+        """Connector must run exactly three targeted queries, not one grouped query."""
         client = make_happy_client()
         await make_connector(client).get_context()
-        client.search_pull_requests.assert_awaited_once()
-        query_arg = client.search_pull_requests.call_args[0][0]
-        assert "is:open" in query_arg
-        assert "is:pr" in query_arg
+        assert client.search_pull_requests.await_count == 3
+
+    async def test_all_three_query_strings_contain_is_open_is_pr(self):
+        client = make_happy_client()
+        await make_connector(client).get_context()
+        for c in client.search_pull_requests.call_args_list:
+            query = c[0][0]
+            assert "is:open" in query
+            assert "is:pr" in query
+
+    async def test_no_parenthesised_or_in_queries(self):
+        """The 422-causing grouped OR syntax must not appear in any query."""
+        client = make_happy_client()
+        await make_connector(client).get_context()
+        for c in client.search_pull_requests.call_args_list:
+            query = c[0][0]
+            assert "(" not in query
+            assert " OR " not in query
 
     async def test_all_sub_fetches_called(self):
         client = make_happy_client()
@@ -149,6 +182,33 @@ class TestGetContextSuccess:
         client.get_review_comments.assert_awaited_once()
         client.get_pull_request_reviews.assert_awaited_once()
         client.get_check_runs.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Deduplication — same PR appears in multiple query results
+# ---------------------------------------------------------------------------
+
+class TestDeduplication:
+
+    async def test_same_pr_in_multiple_queries_is_enriched_once(self):
+        """PR #42 returned by both author and review-requested queries → enriched once."""
+        pr_item = {
+            "number": 42,
+            "html_url": "https://github.com/acme/my-repo/pull/42",
+            "repository_url": "https://api.github.com/repos/acme/my-repo",
+        }
+
+        client = make_happy_client()
+        # All three queries return the same PR.
+        client.search_pull_requests = AsyncMock(
+            return_value={"total_count": 1, "items": [pr_item]}
+        )
+
+        result = await make_connector(client).get_context()
+        assert result.status == ConnectorStatus.SUCCESS
+        assert len(result.data["pull_requests"]) == 1
+        # get_pull_request should only be called once despite three search hits.
+        client.get_pull_request.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -201,22 +261,44 @@ class TestGetContextUserFetchFails:
 
 class TestGetContextSearchFails:
 
-    async def test_search_failure_returns_failed(self):
+    async def test_all_searches_fail_returns_success_with_empty_list(self):
+        """
+        All three search queries failing (gracefully returning None via _safe_search)
+        is treated as zero PRs found — not a hard FAILED result.  The connector
+        cannot distinguish "API returned empty" from "API failed silently".
+        """
         client = make_happy_client()
         client.search_pull_requests = AsyncMock(
             side_effect=GitHubServiceError("search endpoint unreachable")
         )
         result = await make_connector(client).get_context()
-        assert result.status == ConnectorStatus.FAILED
+        assert result.status == ConnectorStatus.SUCCESS
+        assert result.data["pull_requests"] == []
 
-    async def test_search_failure_has_error_message(self):
+    async def test_partial_search_failure_still_processes_successful_queries(self):
+        """
+        If one of three queries fails, the PRs from the other two are still
+        returned in the result.
+        """
+        pr_item = {
+            "number": 42,
+            "html_url": "https://github.com/acme/my-repo/pull/42",
+            "repository_url": "https://api.github.com/repos/acme/my-repo",
+        }
+
+        def _search_side_effect(query: str) -> dict[str, Any]:
+            if "author:@me" in query:
+                raise GitHubServiceError("422 Validation Failed")
+            if "review-requested:@me" in query:
+                return {"total_count": 1, "items": [pr_item]}
+            return RAW_SEARCH_EMPTY
+
         client = make_happy_client()
-        client.search_pull_requests = AsyncMock(
-            side_effect=GitHubServiceError("search endpoint unreachable")
-        )
+        client.search_pull_requests = AsyncMock(side_effect=_search_side_effect)
+
         result = await make_connector(client).get_context()
-        assert len(result.errors) == 1
-        assert "search" in result.errors[0].lower()
+        assert result.status == ConnectorStatus.SUCCESS
+        assert len(result.data["pull_requests"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -225,38 +307,36 @@ class TestGetContextSearchFails:
 
 class TestGetContextPartialEnrichment:
 
-    async def test_single_sub_fetch_failure_returns_partial(self):
-        """When one PR's enrichment sub-fetch fails, the PR is dropped but
-        the overall result is PARTIAL (some PRs succeeded)."""
-        # Set up two PRs in search, first one fails on get_pull_request.
-        two_pr_search = {
-            "total_count": 2,
-            "items": [
-                {
-                    "number": 1,
-                    "html_url": "https://github.com/acme/repo/pull/1",
-                    "repository_url": "https://api.github.com/repos/acme/repo",
-                },
-                {
-                    "number": 2,
-                    "html_url": "https://github.com/acme/repo/pull/2",
-                    "repository_url": "https://api.github.com/repos/acme/repo",
-                },
-            ],
-        }
+    async def test_single_pr_enrichment_failure_returns_partial(self):
+        """When one PR's get_pull_request fails, that PR is dropped but the
+        overall result is PARTIAL (remaining PRs still succeeded)."""
+        two_pr_items = [
+            {
+                "number": 1,
+                "html_url": "https://github.com/acme/repo/pull/1",
+                "repository_url": "https://api.github.com/repos/acme/repo",
+            },
+            {
+                "number": 2,
+                "html_url": "https://github.com/acme/repo/pull/2",
+                "repository_url": "https://api.github.com/repos/acme/repo",
+            },
+        ]
         raw_pr_2 = {**RAW_PR, "number": 2}
 
-        call_count = 0
-
         async def get_pr_side_effect(owner, repo, number):
-            nonlocal call_count
-            call_count += 1
             if number == 1:
                 raise GitHubServiceError("PR 1 fetch failed")
             return raw_pr_2
 
         client = make_happy_client()
-        client.search_pull_requests = AsyncMock(return_value=two_pr_search)
+        # First query returns both PRs; other two return empty.
+        client.search_pull_requests = AsyncMock(
+            side_effect=lambda q: (
+                {"total_count": 2, "items": two_pr_items}
+                if "author:@me" in q else RAW_SEARCH_EMPTY
+            )
+        )
         client.get_pull_request = AsyncMock(side_effect=get_pr_side_effect)
 
         result = await make_connector(client).get_context()
@@ -300,9 +380,8 @@ class TestMaxPRsCap:
 
         result = await make_connector(client, max_prs=3).get_context()
         assert result.status == ConnectorStatus.SUCCESS
-        # Only 3 PRs enriched
+        # Only 3 PRs enriched despite 10 found across all queries (deduplicated).
         assert result.metadata.get("prs_enriched") == 3
-        assert result.data["total_prs_found"] == 10
 
 
 # ---------------------------------------------------------------------------

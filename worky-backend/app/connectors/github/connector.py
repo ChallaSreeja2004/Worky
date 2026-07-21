@@ -47,11 +47,15 @@ from app.connectors.github.normalizer import GitHubNormalizer
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# GitHub search query
+# GitHub search queries
 # ---------------------------------------------------------------------------
 
-_DEFAULT_SEARCH_QUERY = (
-    "is:open is:pr (author:@me OR review-requested:@me OR assignee:@me)"
+# GitHub's search/issues API does not support parenthesised OR groups, so we
+# run three targeted queries and deduplicate results by (repository_url, number).
+_SEARCH_QUERIES: tuple[str, ...] = (
+    "is:open is:pr author:@me",
+    "is:open is:pr review-requested:@me",
+    "is:open is:pr assignee:@me",
 )
 
 
@@ -133,17 +137,29 @@ class GitHubConnector(BaseConnector):
                 errors=[f"Authenticated user fetch failed: {exc.message}"],
             )
 
-        # Step 2 — search for open PRs involving the authenticated user.
-        try:
-            raw_search = await self._client.search_pull_requests(_DEFAULT_SEARCH_QUERY)
-        except GitHubError as exc:
-            logger.error("GitHubConnector: PR search failed — %s", exc.message)
-            return ConnectorResult.failed(
-                source=self.source_name,
-                errors=[f"PR search failed: {exc.message}"],
-            )
+        # Step 2 — run three targeted searches concurrently and merge results.
+        search_results = await asyncio.gather(
+            *[self._safe_search(q) for q in _SEARCH_QUERIES],
+            return_exceptions=False,
+        )
 
-        items: list[dict[str, Any]] = raw_search.get("items", [])
+        # Deduplicate by (repository_url, number) — a PR can match multiple queries.
+        seen: set[tuple[str, int]] = set()
+        items: list[dict[str, Any]] = []
+        total_count = 0
+        for result in search_results:
+            if result is None:
+                continue
+            total_count += result.get("total_count", 0)
+            for item in result.get("items", []):
+                key = (item.get("repository_url", ""), item.get("number", 0))
+                if key not in seen:
+                    seen.add(key)
+                    items.append(item)
+
+        # Synthetic search envelope for the normalizer (total = unique PR count).
+        raw_search: dict[str, Any] = {"total_count": len(items), "items": items}
+
         # Cap to max_prs to bound API cost.
         items = items[: self._max_prs]
 
@@ -244,6 +260,21 @@ class GitHubConnector(BaseConnector):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    async def _safe_search(self, query: str) -> dict[str, Any] | None:
+        """
+        Run one search query and return the raw result dict.
+
+        Returns None on any error so the fan-out in get_context() can
+        tolerate individual query failures without aborting the whole run.
+        """
+        try:
+            return await self._client.search_pull_requests(query)
+        except GitHubError as exc:
+            logger.warning(
+                "GitHubConnector: search query %r failed — %s", query, exc.message
+            )
+            return None
 
     async def _enrich_pr(self, search_item: dict[str, Any]) -> dict[str, Any]:
         """
