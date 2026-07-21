@@ -82,6 +82,10 @@ app.include_router(outlook_router, prefix=f"{settings.api_v1_prefix}/connectors/
 from app.connectors.slack.router import router as slack_router
 app.include_router(slack_router, prefix=f"{settings.api_v1_prefix}/connectors/slack", tags=["Slack"])
 
+# GitHub connector
+from app.connectors.github.router import router as github_router
+app.include_router(github_router, prefix=f"{settings.api_v1_prefix}/connectors/github", tags=["GitHub"])
+
 # [TODO — Recommendations (widget-facing API)]
 # from app.recommendations.router import router as recommendations_router
 # app.include_router(recommendations_router, prefix=f"{settings.api_v1_prefix}/recommendations", tags=["Recommendations"])
