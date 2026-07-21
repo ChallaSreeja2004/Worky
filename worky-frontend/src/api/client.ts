@@ -29,7 +29,12 @@ import axios from 'axios'
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL as string,
-  timeout: 15_000,
+  // 60 s — Bob CLI generation takes 15–30 s; the backend BobCLIService timeout
+  // is 120 s.  15 s (the previous value) was shorter than Bob's response time,
+  // causing every recommendations request to be cancelled before the backend
+  // could reply.  60 s gives Bob headroom while still providing a hard ceiling
+  // well under the backend's own 120 s timeout.
+  timeout: 60_000,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',

@@ -86,6 +86,23 @@ app.include_router(outlook_router, prefix=f"{settings.api_v1_prefix}/connectors/
 from app.recommendations.router import router as recommendations_router
 app.include_router(recommendations_router, prefix=f"{settings.api_v1_prefix}/recommendations", tags=["Recommendations"])
 
+# Demo routers — only mounted when CONNECTOR_MODE=demo.
+# Provides:
+#   POST /api/v1/auth/demo               — synthetic session creation (auth_router)
+#   GET  /api/v1/connectors/demo/context — synthetic Outlook context  (context_router)
+# In production (CONNECTOR_MODE=outlook) these routes are never mounted,
+# so they cannot be discovered or accidentally called.
+if settings.connector_mode == "demo":
+    from app.connectors.demo.router import auth_router as demo_auth_router
+    from app.connectors.demo.router import context_router as demo_context_router
+    app.include_router(demo_auth_router,    prefix=f"{settings.api_v1_prefix}/auth",            tags=["Demo"])
+    app.include_router(demo_context_router, prefix=f"{settings.api_v1_prefix}/connectors/demo", tags=["Demo"])
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "DEMO MODE ACTIVE — DemoOutlookConnector is in use. "
+        "Set CONNECTOR_MODE=outlook to use the production Microsoft Graph path."
+    )
+
 
 # ---------------------------------------------------------------------------
 # Health check

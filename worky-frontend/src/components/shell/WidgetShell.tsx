@@ -40,6 +40,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '../../hooks/useAuth.ts'
 import { useOutlookState } from '../../context/outlookStateContext.ts'
 import { formatRelativeTime } from '../../utils/formatters.ts'
+import DemoBadge from '../shared/DemoBadge.tsx'
 
 interface WidgetShellProps {
   children: React.ReactNode
@@ -121,9 +122,13 @@ export default function WidgetShell({ children }: WidgetShellProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Demo mode badge — only shown when the session was created via the
+              demo auth endpoint. Hidden in all real OAuth sessions. */}
+          {user?.is_demo && <DemoBadge />}
+
           {/* Display name from the /auth/success redirect. Falls back to "—". */}
-          <span className="text-xs text-gray-400 truncate max-w-[120px]">
-            {user?.display_name || '—'}
+          <span className="text-xs text-gray-400 truncate max-w-[100px]">
+            {user?.is_demo ? 'Demo Mode' : (user?.display_name || '—')}
           </span>
 
           {/*
@@ -199,7 +204,7 @@ export default function WidgetShell({ children }: WidgetShellProps) {
       {/* ------------------------------------------------------------------ */}
       {/* Content area — scrollable when content exceeds max height           */}
       {/* ------------------------------------------------------------------ */}
-      <main className="flex-1 overflow-y-auto max-h-[560px]">
+      <main className="flex-1 overflow-y-auto max-h-[520px]">
         {children}
       </main>
 
@@ -207,9 +212,17 @@ export default function WidgetShell({ children }: WidgetShellProps) {
       {/* Footer                                                               */}
       {/* ------------------------------------------------------------------ */}
       <footer className="flex items-center justify-between px-4 py-1.5 border-t border-gray-100">
-        <span className="text-[10px] text-gray-300 font-medium tracking-wide uppercase">
-          Powered by IBM Bob
-        </span>
+        <a
+          href="https://ibm.com/products/watsonx"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors"
+        >
+          View in IBM Bob
+          <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+          </svg>
+        </a>
         {/* "Updated N min ago" from ConnectorResult.collected_at */}
         <span className="text-[10px] text-gray-300">{footerLabel}</span>
       </footer>

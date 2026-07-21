@@ -50,10 +50,25 @@ class AppSettings(BaseSettings):
     # API
     # ------------------------------------------------------------------
     api_v1_prefix: str = "/api/v1"
+
+    # ------------------------------------------------------------------
+    # Connector mode
+    # ------------------------------------------------------------------
+    connector_mode: Literal["outlook", "demo"] = "outlook"
     """
-    All routes are mounted under this prefix.
-    Versioning from day one avoids a painful migration when the desktop
-    widget v1 and a backend v2 must coexist in the field.
+    Controls which Outlook data source is used throughout the pipeline.
+
+    "outlook"  (default)
+        Full production path: Microsoft OAuth → GraphAPIClient →
+        OutlookConnector → real calendar and email data.
+
+    "demo"
+        No Microsoft credentials required.  DemoOutlookConnector returns
+        realistic synthetic data.  The entire authentication and Graph API
+        layer is bypassed.
+
+    Changing this single variable is the ONLY configuration change needed
+    to switch between production and demo execution.
     """
 
     # ------------------------------------------------------------------

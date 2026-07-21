@@ -13,6 +13,16 @@ injection system and the Recommendation Service.  They ensure:
     they can be replaced with test doubles without changing the router.
   • Each dependency provider has a single responsibility.
 
+CONNECTOR MODE
+--------------
+get_outlook_connector() reads CONNECTOR_MODE from AppSettings and returns
+the appropriate connector:
+
+  CONNECTOR_MODE=outlook  → OutlookConnector wired to a real GraphAPIClient
+  CONNECTOR_MODE=demo     → DemoOutlookConnector (no credentials required)
+
+No other component in the pipeline knows which connector is active.
+
 IMPORT RULES
 ------------
 This module may import from:
@@ -22,12 +32,12 @@ This module may import from:
   • app.auth.service            (AuthService — type annotation only)
   • app.bob.dependencies
   • app.bob.service             (BobService interface — type annotation only)
+  • app.config.settings
+  • app.connectors.base         (BaseConnector — type annotation only)
+  • app.connectors.demo.connector
   • app.connectors.outlook.*
   • app.context_builder.builder
   • app.recommendations.service
-
-It must NOT import from:
-  • app.config
 """
 
 from __future__ import annotations
@@ -36,6 +46,9 @@ from app.auth.dependencies import get_auth_service
 from app.auth.service import AuthService
 from app.bob.dependencies import get_bob_service
 from app.bob.service import BobService
+from app.config.settings import get_settings
+from app.connectors.base import BaseConnector
+from app.connectors.demo.connector import DemoOutlookConnector
 from app.connectors.outlook.connector import OutlookConnector
 from app.connectors.outlook.graph_client import GraphAPIClient
 from app.connectors.outlook.normalizer import OutlookNormalizer
@@ -92,7 +105,33 @@ def build_outlook_connector(access_token: str) -> OutlookConnector:
     Called by the router after obtaining a valid token from AuthService.
     Returns a fresh connector instance scoped to this request's token —
     GraphAPIClient is not a singleton (it carries a bearer token).
+
+    Used only in CONNECTOR_MODE=outlook.  In demo mode the router uses
+    get_outlook_connector() which returns DemoOutlookConnector instead.
     """
     client = GraphAPIClient(access_token=access_token)
     normalizer = OutlookNormalizer()
     return OutlookConnector(graph_client=client, normalizer=normalizer)
+
+
+def get_outlook_connector(access_token: str = "") -> BaseConnector:
+    """
+    Return the active Outlook connector based on CONNECTOR_MODE.
+
+    In production (CONNECTOR_MODE=outlook):
+        Returns an OutlookConnector wired to a real GraphAPIClient carrying
+        the provided access_token.  The access_token must be a valid,
+        non-empty Microsoft bearer token.
+
+    In demo mode (CONNECTOR_MODE=demo):
+        Returns a DemoOutlookConnector.  The access_token parameter is
+        accepted for interface compatibility but is not used.
+
+    This is the single switchable seam in the pipeline.  All components
+    above this layer (ContextBuilder, RecommendationService, BobCLIService)
+    receive an identical ConnectorResult regardless of which branch is taken.
+    """
+    settings = get_settings()
+    if settings.connector_mode == "demo":
+        return DemoOutlookConnector()
+    return build_outlook_connector(access_token)

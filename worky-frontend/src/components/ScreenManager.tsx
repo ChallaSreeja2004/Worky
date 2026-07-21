@@ -47,7 +47,8 @@ import LoadingSpinner from './shared/LoadingSpinner.tsx'
 export default function ScreenManager() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth()
 
-  const userId = isAuthenticated ? user?.user_id : undefined
+  const userId  = isAuthenticated ? user?.user_id  : undefined
+  const isDemo  = user?.is_demo === true
 
   const {
     result,
@@ -56,7 +57,7 @@ export default function ScreenManager() {
     status,
     error: outlookError,
     refresh: refreshOutlook,
-  } = useOutlookContext(userId)
+  } = useOutlookContext(userId, isDemo)
 
   const {
     data: recommendations,
@@ -67,6 +68,8 @@ export default function ScreenManager() {
   } = useRecommendations(userId)
 
   // Combined refresh: refreshes both Outlook context and recommendations.
+  // In demo mode refreshOutlook() is a no-op (the hook guard blocks the
+  // /connectors/outlook/context request); only recommendations are refreshed.
   // Memoized so the OutlookStateContext value object reference is stable
   // across renders that don't change the underlying refresh callbacks.
   const handleRefresh = useCallback(() => {
@@ -115,6 +118,7 @@ export default function ScreenManager() {
           recommendations={recommendations?.recommendations ?? null}
           recsLoading={recsLoading}
           recsError={recsError}
+          displayName={isDemo ? 'Demo User' : (user?.display_name || undefined)}
         />
       </OutlookStateContext.Provider>
     )

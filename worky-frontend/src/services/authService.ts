@@ -11,7 +11,6 @@
  *
  * WHAT THIS MODULE DOES NOT DO
  * -----------------------------
- *   • It does NOT make any HTTP requests.
  *   • It does NOT implement OAuth logic.
  *   • It does NOT store or read tokens of any kind.
  *   • It does NOT import from React — it is plain TypeScript.
@@ -56,9 +55,11 @@ export function loadUser(): WorkyUser | null {
       typeof parsed.email === 'string'
     ) {
       return {
-        user_id: parsed.user_id,
+        user_id:      parsed.user_id,
         display_name: parsed.display_name,
-        email: parsed.email,
+        email:        parsed.email,
+        // Preserve is_demo so a demo session survives a page refresh.
+        is_demo: parsed.is_demo === true ? true : undefined,
       }
     }
     // Stored data is missing required fields — treat as no user.
@@ -103,3 +104,4 @@ export function parseAuthSuccessParams(): WorkyUser | null {
 
   return { user_id, display_name, email }
 }
+

@@ -55,7 +55,7 @@ Coverage
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -493,7 +493,24 @@ class TestLogging:
 # Auth error mapping
 # ---------------------------------------------------------------------------
 
+class _OutlookSettings:
+    """Minimal settings stand-in that forces connector_mode=outlook.
+
+    Applied to every test in TestAuthErrorMapping so the router executes
+    the production auth path regardless of what CONNECTOR_MODE is set to
+    in the local .env file.
+    """
+    connector_mode = "outlook"
+
+
 class TestAuthErrorMapping:
+
+    @pytest.fixture(autouse=True)
+    def force_outlook_mode(self):
+        """Patch get_settings to return connector_mode=outlook for every test
+        in this class, decoupling the tests from the local .env value."""
+        with patch("app.recommendations.router.get_settings", return_value=_OutlookSettings()):
+            yield
 
     def test_auth_user_not_found_returns_401(self):
         """AuthUserNotFoundError raised by auth_service → HTTP 401."""
@@ -647,6 +664,7 @@ class TestFullPipeline:
         app.dependency_overrides[get_auth_service_dep] = lambda: auth
         app.dependency_overrides[get_context_builder] = lambda: builder
         client = TestClient(app, raise_server_exceptions=False)
-        client.get("/api/v1/recommendations/?user_id=user-001")
+        with patch("app.recommendations.router.get_settings", return_value=_OutlookSettings()):
+            client.get("/api/v1/recommendations/?user_id=user-001")
 
         assert call_order == ["auth", "build"]
