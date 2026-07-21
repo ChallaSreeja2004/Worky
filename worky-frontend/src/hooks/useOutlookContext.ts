@@ -5,11 +5,21 @@
  *
  * RESPONSIBILITIES
  * ----------------
- *   • Call getOutlookContext(userId) on mount and on manual refresh.
+ *   • Call the correct context endpoint on mount and on manual refresh.
  *   • Expose typed ConnectorResult data to the component tree.
  *   • Manage loading, error, and stale-data states.
  *   • Never replace visible data with empty state while a refresh is in flight.
  *   • Cancel in-flight requests on unmount or when userId changes (AbortController).
+ *
+ * DEMO MODE
+ * ---------
+ *   When isDemo is true the hook calls getDemoContext() instead of
+ *   getOutlookContext().  getDemoContext() calls
+ *   GET /api/v1/connectors/demo/context which is backed by DemoOutlookConnector
+ *   — the same connector the recommendations pipeline uses, so the displayed
+ *   meetings and emails always match what Bob reasoned over.
+ *   The production /connectors/outlook/context endpoint is never called for
+ *   demo users.
  *
  * RULES
  * -----
@@ -21,7 +31,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getOutlookContext } from '../services/outlookService.ts'
+import { getDemoContext, getOutlookContext } from '../services/outlookService.ts'
 import type { ConnectorResult, ConnectorStatus, OutlookData } from '../types/index.ts'
 
 export interface OutlookContextState {
@@ -39,10 +49,11 @@ export interface OutlookContextState {
   refresh: () => void
 }
 
-export function useOutlookContext(userId: string | undefined): OutlookContextState {
-  // C5: initialise isLoading to true when userId is defined so the spinner
-  // is shown immediately — before the first async tick — preventing the
-  // brief empty-state flash that occurred when isLoading started as false.
+export function useOutlookContext(userId: string | undefined, isDemo: boolean = false): OutlookContextState {
+  // Initialise isLoading to true whenever userId is defined so the spinner
+  // is shown immediately — before the first async tick — preventing an
+  // empty-state flash.  This applies in both Outlook and Demo modes because
+  // both now fetch a context endpoint on mount.
   const [result,       setResult]       = useState<ConnectorResult<OutlookData> | null>(null)
   const [isLoading,    setIsLoading]    = useState(() => Boolean(userId))
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -69,7 +80,9 @@ export function useOutlookContext(userId: string | undefined): OutlookContextSta
     setError(null)
 
     try {
-      const data = await getOutlookContext(userId)
+      const data = isDemo
+        ? await getDemoContext(userId)
+        : await getOutlookContext(userId)
 
       // If this request was aborted (component unmounted or superseded), do
       // not apply its result to avoid stale state overwrites.
@@ -88,7 +101,7 @@ export function useOutlookContext(userId: string | undefined): OutlookContextSta
         setIsRefreshing(false)
       }
     }
-  }, [userId])
+  }, [userId, isDemo])
 
   // Fetch on mount (or when userId becomes available after sign-in).
   useEffect(() => {

@@ -100,3 +100,39 @@ export function formatEmailTime(isoString: string): string {
 
   return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 }
+
+/**
+ * Return a human-readable "starts in N min / hr" string for a future meeting.
+ *
+ * Examples
+ * --------
+ *   start is 8 minutes from now   →  "Starts in 8 min"
+ *   start is 90 minutes from now  →  "Starts in 1 hr 30 min"
+ *   start is in the past          →  "In progress"
+ *   start is within 1 minute      →  "Starting now"
+ */
+export function formatTimeUntil(isoStart: string): string {
+  const start = new Date(isoStart)
+  if (isNaN(start.getTime())) return '—'
+
+  const diffMs  = start.getTime() - Date.now()
+  const diffMin = Math.round(diffMs / 60_000)
+
+  if (diffMin <= 0) return 'In progress'
+  if (diffMin < 1)  return 'Starting now'
+  if (diffMin < 60) return `Starts in ${diffMin} min`
+
+  const hrs = Math.floor(diffMin / 60)
+  const rem = diffMin % 60
+  return rem === 0
+    ? `Starts in ${hrs} hr`
+    : `Starts in ${hrs} hr ${rem} min`
+}
+
+/**
+ * Return the hour of day (0–23) for a given ISO 8601 string in local time.
+ * Used to derive a contextual greeting ("Good morning / afternoon / evening").
+ */
+export function localHour(): number {
+  return new Date().getHours()
+}

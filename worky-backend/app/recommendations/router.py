@@ -11,19 +11,24 @@ ENDPOINTS
 
 EXECUTION FLOW
 --------------
+Production mode (CONNECTOR_MODE=outlook):
   1. Validate user_id query parameter (FastAPI schema).
   2. Call AuthService.get_valid_token(user_id) to obtain a valid access token.
      → 401 if no token exists (user has not authenticated).
   3. Build an OutlookConnector wired to the user's access token.
   4. Call ContextBuilder.build(user_id, connectors, access_token).
-     → Individual connector failures are isolated; the pipeline continues
-       with the remaining successful connectors.
   5. Pass the populated WorkContext to RecommendationService.generate().
   6. Return the RecommendationSet to the widget.
+
+Demo mode (CONNECTOR_MODE=demo):
+  Steps 1–2 are replaced by a no-op — the demo user has no stored token.
+  Step 3 builds a DemoOutlookConnector (no access_token required).
+  Steps 4–6 are identical to production.
 
 ERROR MAPPING
 -------------
   AuthUserNotFoundError  → 401  (user must authenticate first)
+  AuthRefreshError       → 401  (token expired; re-authentication required)
   RecommendationError    → 422  (caller supplied invalid input)
   BobTimeoutError        → 504  (gateway timeout)
   BobNetworkError        → 502  (bad gateway — network-level failure)
@@ -39,6 +44,7 @@ This module may import from:
   • app.auth.service           (AuthUserNotFoundError)
   • app.bob.service            (exception types only)
   • app.bob.models             (RecommendationSet — response type)
+  • app.config.settings
   • app.connectors.base        (BaseConnector — type annotation only)
   • app.context_builder.builder (ContextBuilder — type annotation only)
   • app.recommendations.dependencies
@@ -61,11 +67,12 @@ from app.bob.service import (
     BobServiceError,
     BobTimeoutError,
 )
+from app.config.settings import get_settings
 from app.context_builder.builder import ContextBuilder
 from app.recommendations.dependencies import (
-    build_outlook_connector,
     get_auth_service_dep,
     get_context_builder,
+    get_outlook_connector,
     get_recommendation_service,
 )
 from app.recommendations.exceptions import RecommendationError
@@ -98,12 +105,12 @@ async def get_recommendations(
     """
     Generate a RecommendationSet for the given user.
 
-    Retrieves a valid access token, runs registered connectors concurrently
-    via ContextBuilder to assemble a populated WorkContext, then delegates
-    to RecommendationService → BobCLIService for AI reasoning.
+    In production mode: retrieves a valid access token from AuthService, runs
+    the OutlookConnector via ContextBuilder, then delegates to
+    RecommendationService → BobCLIService for AI reasoning.
 
-    Individual connector failures are isolated — if Outlook fails the
-    pipeline still continues with an empty context and Bob is still called.
+    In demo mode: skips token retrieval, runs DemoOutlookConnector directly,
+    then follows the identical path through ContextBuilder and Bob.
 
     Raises HTTP 401 if the user has not authenticated (no stored token).
     Raises HTTP 422 if user_id is empty (RecommendationError).
@@ -113,29 +120,38 @@ async def get_recommendations(
     """
     logger.info("recommendations: generating for user_id=%s", user_id)
 
-    # ------------------------------------------------------------------
-    # Step 1 — Obtain a valid access token for this user.
-    # ------------------------------------------------------------------
-    try:
-        access_token = await auth_service.get_valid_token(user_id)
-    except AuthUserNotFoundError as exc:
-        logger.warning(
-            "recommendations: user not authenticated — user_id=%s", user_id
-        )
-        raise HTTPException(status_code=401, detail=exc.message)
-    except AuthRefreshError as exc:
-        logger.warning(
-            "recommendations: token refresh failed, re-auth required — user_id=%s", user_id
-        )
-        raise HTTPException(status_code=401, detail=exc.message)
+    settings = get_settings()
+    is_demo = settings.connector_mode == "demo"
 
     # ------------------------------------------------------------------
-    # Step 2 — Build connectors and assemble WorkContext.
-    # Connector failures are isolated inside ContextBuilder._collect_connector()
-    # and recorded as FAILED ConnectorResults — they never abort the pipeline.
+    # Step 1 — Obtain a valid access token (production only).
+    # In demo mode this step is skipped entirely — no token is needed.
     # ------------------------------------------------------------------
-    outlook_connector = build_outlook_connector(access_token)
-    connectors = [outlook_connector]
+    access_token = ""
+
+    if not is_demo:
+        try:
+            access_token = await auth_service.get_valid_token(user_id)
+        except AuthUserNotFoundError as exc:
+            logger.warning(
+                "recommendations: user not authenticated — user_id=%s", user_id
+            )
+            raise HTTPException(status_code=401, detail=exc.message)
+        except AuthRefreshError as exc:
+            logger.warning(
+                "recommendations: token refresh failed, re-auth required — user_id=%s",
+                user_id,
+            )
+            raise HTTPException(status_code=401, detail=exc.message)
+
+    # ------------------------------------------------------------------
+    # Step 2 — Build connector and assemble WorkContext.
+    # get_outlook_connector() returns DemoOutlookConnector in demo mode
+    # and OutlookConnector in production — the rest of the pipeline is
+    # identical regardless of which connector is active.
+    # ------------------------------------------------------------------
+    connector = get_outlook_connector(access_token)
+    connectors = [connector]
 
     work_context = await context_builder.build(
         user_id=user_id,
@@ -144,9 +160,10 @@ async def get_recommendations(
     )
 
     logger.info(
-        "recommendations: context assembled — user_id=%s active_sources=%s",
+        "recommendations: context assembled — user_id=%s active_sources=%s mode=%s",
         user_id,
         work_context.active_sources,
+        "demo" if is_demo else "outlook",
     )
 
     # ------------------------------------------------------------------

@@ -22,10 +22,10 @@
  * TIMING NOTE
  * -----------
  * Recommendations are generated on-demand by the backend — each call triggers
- * IBM Bob to reason over the current Outlook context.  The backend may take
- * 15–30 s on the first call.  The timeout on the API client (15 s) is
- * deliberately lower than Bob's worst-case latency, so the hook surfaces a
- * clear timeout error rather than hanging indefinitely.
+ * IBM Bob CLI to reason over the current Outlook context.  Bob CLI typically
+ * takes 15–30 s to complete.  The Axios client timeout is set to 60 s
+ * (see src/api/client.ts) to give Bob headroom while still providing a hard
+ * ceiling well under the backend's own 120 s subprocess timeout.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'

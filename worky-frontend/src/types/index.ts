@@ -29,6 +29,12 @@ export interface WorkyUser {
   display_name: string
   /** Enterprise email address. Empty string if unavailable. */
   email: string
+  /**
+   * True when this session was created via the demo auth endpoint rather than
+   * Microsoft OAuth.  Used only for displaying the Demo Mode badge in the UI.
+   * Always false (or absent) for real production sessions.
+   */
+  is_demo?: boolean
 }
 
 // ---------------------------------------------------------------------------
