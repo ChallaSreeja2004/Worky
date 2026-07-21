@@ -117,8 +117,9 @@ class CalendarEvent(BaseModel):
 
     id: str = Field(..., description="Graph event ID.")
     subject: str = Field(default="", description="Event title.")
-    start: str = Field(default="", description="ISO 8601 start datetime string.")
-    end: str = Field(default="", description="ISO 8601 end datetime string.")
+    start: str = Field(default="", description="ISO 8601 start datetime string (UTC, Z-terminated).")
+    end: str = Field(default="", description="ISO 8601 end datetime string (UTC, Z-terminated).")
+    start_timezone: str = Field(default="UTC", description="IANA or Windows timezone name from Graph (informational).")
     location: str = Field(default="", description="Meeting location display name.")
     organizer_name: str = Field(default="", description="Organiser display name.")
     organizer_email: str = Field(default="", description="Organiser email address.")

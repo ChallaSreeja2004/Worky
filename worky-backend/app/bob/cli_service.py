@@ -56,6 +56,7 @@ import json
 import logging
 import shutil
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from app.bob.models import Recommendation, RecommendationSet
@@ -80,6 +81,16 @@ You are a productivity assistant for an IBM employee.
 Below is a JSON object describing the user's current work context across \
 their enterprise tools (Outlook, GitHub, Jira, Slack, etc.).
 
+IMPORTANT — TIMEZONE NOTE:
+All calendar event start/end times in the context are in UTC (ISO 8601 with \
+"Z" suffix, e.g. "2026-07-21T16:00:00.000Z"). The "user_timezone" field \
+names the user's local timezone (e.g. "IST", "EST", "PST"). When you mention \
+a meeting time in a recommendation title or description, convert it from UTC \
+to the user's local timezone before writing the time. For example, if \
+user_timezone is "IST" (UTC+5:30) and a meeting starts at \
+"2026-07-21T16:00:00.000Z", write "9:30 PM IST" — never write the raw UTC \
+time. If "user_timezone" is "UTC", write the time as-is with "UTC" appended.
+
 Analyse this context and return ONLY a JSON array of prioritised action \
 recommendations. Return nothing else — no prose, no markdown fences, \
 no explanation.
@@ -100,8 +111,32 @@ Work context:
 {context_json}"""
 
 
+def _local_timezone_name() -> str:
+    """
+    Return the abbreviated name of the system's local timezone.
+
+    Examples: "IST", "EST", "PST", "UTC".
+
+    Uses datetime.now().astimezone() which reads the OS timezone — correct for
+    a desktop app where the backend runs on the user's own machine.  Falls back
+    to "UTC" only when the platform cannot determine a timezone name.
+    """
+    try:
+        name = datetime.now(timezone.utc).astimezone().tzname()
+        return name or "UTC"
+    except Exception:  # noqa: BLE001
+        return "UTC"
+
+
 def _build_prompt(work_context: WorkContext) -> str:
     """Serialise the WorkContext into a Bob Shell prompt string."""
+    # Derive the user's display timezone from the OS — the backend runs as a
+    # desktop process on the user's machine, so the system timezone is the
+    # user's local timezone.  This is more reliable than reading start_timezone
+    # from Graph events, which always reflects the Prefer header value ("UTC")
+    # rather than the user's geographic timezone.
+    user_timezone = _local_timezone_name()
+
     context_payload: dict[str, Any] = {
         "user_id": work_context.user_id,
         "assembled_at": work_context.assembled_at.isoformat(),
@@ -116,6 +151,10 @@ def _build_prompt(work_context: WorkContext) -> str:
             for s in work_context.connector_summaries
         ],
         "errors": work_context.errors,
+        # Timezone hint for Bob: all calendar datetimes are UTC; this field
+        # names the user's local timezone (from the OS) so Bob can convert
+        # meeting times from UTC to the user's local time for display.
+        "user_timezone": user_timezone,
     }
     context_json = json.dumps(context_payload, default=str, indent=2)
     return _PROMPT_TEMPLATE.format(context_json=context_json)

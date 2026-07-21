@@ -16,7 +16,6 @@ RESPONSIBILITIES
 
 WHAT THIS SERVICE DOES NOT DO
 ------------------------------
-  • It does NOT call Microsoft Graph (that begins in Phase 3)
   • It does NOT know about connectors, WorkContext, or IBM Bob
   • It does NOT choose which TokenRepository implementation to use —
     the concrete repository is injected via the constructor
@@ -31,6 +30,21 @@ authorization code, we prove we initiated the request by sending the original
 verifier.  An interceptor who only has the authorization code cannot redeem
 it without the verifier.
 
+IDENTITY RESOLUTION ORDER
+--------------------------
+After a successful token exchange, user identity is resolved in this order:
+
+  1. id_token JWT claims  (fast, no extra HTTP call)
+     Microsoft returns an id_token only when the "openid" scope is requested.
+     Claims extracted: oid → user_id, name → display_name,
+     preferred_username/email → email.
+
+  2. Graph /me fallback  (one extra HTTP call, but always authoritative)
+     Used when id_token is absent or claims cannot be parsed — e.g., when
+     the tenant policy strips the id_token, or during early dev without OIDC
+     scopes.  Graph fields used: id → user_id, displayName → display_name,
+     mail/userPrincipalName → email.
+
 JWT CLAIMS NOTE
 ---------------
 The id_token returned by Microsoft is decoded to extract user identity
@@ -38,6 +52,13 @@ claims (oid, name, preferred_username).  We do NOT verify the JWT signature
 here — the token is received directly over HTTPS from Microsoft's token
 endpoint, which is the trust anchor.  This avoids the python-jose dependency
 and is sufficient for extracting display metadata from a trusted source.
+
+GRAPH /me NOTE
+--------------
+When id_token is absent the access_token is used to call Graph /me exactly
+once, immediately after the code exchange.  This call is intentionally
+confined to exchange_code_for_tokens() — no other path calls Graph here.
+The Graph API client for production use lives in the connectors layer.
 
 IMPORT RULES
 ------------
@@ -191,6 +212,7 @@ class AuthService:
 
         payload = {
             "client_id":     self._outlook.outlook_client_id,
+            "client_secret": self._outlook.outlook_client_secret,
             "grant_type":    "authorization_code",
             "code":          code,
             "redirect_uri":  self._outlook.outlook_redirect_uri,
@@ -199,6 +221,31 @@ class AuthService:
 
         raw = await self._post_token_request(payload)
         token_data, display_name, email = self._build_token_data(raw)
+
+        # Identity fallback: if id_token was absent or yielded "unknown"
+        # user_id, call Graph /me with the fresh access_token to obtain
+        # authoritative identity.  This handles tenants that do not return
+        # an id_token and early configurations without OIDC scopes.
+        if token_data.user_id in ("unknown", "") or (not display_name and not email):
+            logger.info(
+                "AuthService: id_token missing or incomplete — "
+                "fetching identity from Graph /me"
+            )
+            graph_user_id, graph_display_name, graph_email = (
+                await self._fetch_graph_me(token_data.access_token)
+            )
+            # Replace only the fields that id_token could not supply.
+            if token_data.user_id in ("unknown", ""):
+                token_data = TokenData(
+                    user_id=graph_user_id,
+                    access_token=token_data.access_token,
+                    refresh_token=token_data.refresh_token,
+                    expires_at=token_data.expires_at,
+                )
+            if not display_name:
+                display_name = graph_display_name
+            if not email:
+                email = graph_email
 
         await self._repo.save(token_data)
         logger.info(
@@ -299,6 +346,7 @@ class AuthService:
 
         payload = {
             "client_id":     self._outlook.outlook_client_id,
+            "client_secret": self._outlook.outlook_client_secret,
             "grant_type":    "refresh_token",
             "refresh_token": decrypted_refresh,
             "scope":         self._outlook.scopes_str,
@@ -390,6 +438,74 @@ class AuthService:
             )
 
         return response.json()
+
+    # ------------------------------------------------------------------
+    # Graph /me identity fallback
+    # ------------------------------------------------------------------
+
+    async def _fetch_graph_me(
+        self, access_token: str
+    ) -> Tuple[str, str, str]:
+        """
+        Call GET https://graph.microsoft.com/v1.0/me and return identity fields.
+
+        Used as the authoritative identity source when the token exchange
+        response does not include an id_token (missing OIDC scopes, tenant
+        policy, or early dev configuration).
+
+        Parameters
+        ----------
+        access_token : str
+            A valid Microsoft Graph access token for the signed-in user.
+
+        Returns
+        -------
+        (user_id, display_name, email)
+            user_id      — Graph object id (stable, unique per user per tenant)
+            display_name — Graph displayName
+            email        — Graph mail, falling back to userPrincipalName
+
+        If the Graph call fails for any reason (network error, 4xx, 5xx)
+        the method logs a warning and returns ("unknown", "", "") rather
+        than raising — the caller can still store partial token data and
+        surface an appropriate error to the user via the normal auth flow.
+        """
+        graph_me_url = "https://graph.microsoft.com/v1.0/me"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    graph_me_url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+        except httpx.RequestError as exc:
+            logger.warning(
+                "AuthService: Graph /me network error — %s", exc
+            )
+            return "unknown", "", ""
+
+        if response.status_code != 200:
+            logger.warning(
+                "AuthService: Graph /me returned %s — identity unavailable",
+                response.status_code,
+            )
+            return "unknown", "", ""
+
+        try:
+            me = response.json()
+            user_id = me.get("id") or "unknown"
+            display_name = me.get("displayName") or ""
+            # "mail" is null for many work/school accounts; fall back to UPN
+            email = me.get("mail") or me.get("userPrincipalName") or ""
+            logger.info(
+                "AuthService: identity resolved from Graph /me — user_id=%s",
+                user_id,
+            )
+            return user_id, display_name, email
+        except Exception as exc:
+            logger.warning(
+                "AuthService: could not parse Graph /me response — %s", exc
+            )
+            return "unknown", "", ""
 
     # ------------------------------------------------------------------
     # Token data builder

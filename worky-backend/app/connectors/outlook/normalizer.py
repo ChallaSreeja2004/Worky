@@ -37,6 +37,7 @@ It must NOT import from:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.connectors.outlook.models import (
@@ -47,6 +48,33 @@ from app.connectors.outlook.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Graph returns datetimes with 7 fractional-second digits (.0000000).
+# Strip to 3 digits (.000) which is standard ISO 8601 milliseconds, then
+# ensure the string ends with "Z" so JavaScript's Date() always treats it
+# as UTC.  Without "Z", Date() uses local time — making epoch comparisons
+# browser-timezone-dependent.
+_GRAPH_DT_FRAC = re.compile(r"\.\d+")
+
+def _normalise_graph_datetime(dt: str) -> str:
+    """
+    Normalise a Graph API dateTime string to a standard UTC ISO 8601 string.
+
+    Examples
+    --------
+    "2026-07-21T16:00:00.0000000Z"  →  "2026-07-21T16:00:00.000Z"
+    "2026-07-21T21:30:00.0000000"   →  "2026-07-21T21:30:00.000Z"
+    "2026-07-21T16:00:00Z"          →  "2026-07-21T16:00:00Z"
+    ""                              →  ""
+    """
+    if not dt:
+        return dt
+    # Replace any fractional-second part with .000
+    dt = _GRAPH_DT_FRAC.sub(".000", dt)
+    # Ensure UTC suffix
+    if not dt.endswith("Z") and "+" not in dt and dt.count("-") <= 2:
+        dt = dt + "Z"
+    return dt
 
 
 class OutlookNormalizer:
@@ -140,6 +168,19 @@ class OutlookNormalizer:
 
         Handles missing organizer, missing location, missing onlineMeeting,
         missing subject, and missing bodyPreview defensively.
+
+        Datetime normalisation
+        ----------------------
+        Graph calendarView returns dateTime strings in one of two forms
+        depending on whether a Prefer: outlook.timezone header was sent:
+
+          "2026-07-21T16:00:00.0000000Z"   — UTC (Prefer: outlook.timezone="UTC")
+          "2026-07-21T21:30:00.0000000"    — calendar tz, no offset indicator
+
+        The 7-digit fractional second (.0000000) is non-standard.  We strip
+        it to plain milliseconds (.000) and ensure the Z suffix is present.
+        This guarantees new Date() in any browser always parses as UTC,
+        making the epoch-based Upcoming Meetings filter timezone-independent.
         """
         organizer: dict[str, Any] = raw.get("organizer") or {}
         organizer_address: dict[str, Any] = organizer.get("emailAddress") or {}
@@ -156,8 +197,9 @@ class OutlookNormalizer:
         return CalendarEvent(
             id=raw.get("id", ""),
             subject=raw.get("subject", ""),
-            start=start.get("dateTime", ""),
-            end=end.get("dateTime", ""),
+            start=_normalise_graph_datetime(start.get("dateTime", "")),
+            end=_normalise_graph_datetime(end.get("dateTime", "")),
+            start_timezone=start.get("timeZone", "UTC"),
             location=location.get("displayName", ""),
             organizer_name=organizer_address.get("name", ""),
             organizer_email=organizer_address.get("address", ""),

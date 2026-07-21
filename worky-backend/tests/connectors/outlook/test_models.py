@@ -132,6 +132,7 @@ class TestCalendarEvent:
             "subject",
             "start",
             "end",
+            "start_timezone",
             "location",
             "organizer_name",
             "organizer_email",

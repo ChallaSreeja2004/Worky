@@ -35,6 +35,7 @@ from app.bob.cli_service import (
     BobCLIService,
     _build_prompt,
     _extract_completion_output,
+    _local_timezone_name,
     _parse_recommendations,
 )
 from app.bob.models import Recommendation, RecommendationSet
@@ -484,3 +485,83 @@ class TestParseRecommendationsMarkdownFences:
         items = make_valid_recommendation_list()
         result = _parse_recommendations(json.dumps(items), "req-test")
         assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# _local_timezone_name and _build_prompt timezone behaviour
+# ---------------------------------------------------------------------------
+
+class TestLocalTimezoneName:
+
+    def test_returns_a_non_empty_string(self):
+        """_local_timezone_name() always returns a non-empty string."""
+        name = _local_timezone_name()
+        assert isinstance(name, str)
+        assert len(name) > 0
+
+    def test_falls_back_to_utc_on_exception(self, monkeypatch):
+        """If datetime.now().astimezone() raises, returns 'UTC'."""
+        import app.bob.cli_service as _module
+        original = _module.datetime
+
+        class _BrokenDatetime:
+            @staticmethod
+            def now(*_a, **_kw):
+                raise OSError("no tz info")
+
+        monkeypatch.setattr(_module, "datetime", _BrokenDatetime)
+        result = _local_timezone_name()
+        monkeypatch.setattr(_module, "datetime", original)
+        assert result == "UTC"
+
+
+class TestBuildPromptTimezone:
+
+    def test_user_timezone_in_context_json(self, monkeypatch):
+        """_build_prompt() embeds user_timezone derived from _local_timezone_name()."""
+        import app.bob.cli_service as _module
+        monkeypatch.setattr(_module, "_local_timezone_name", lambda: "IST")
+        ctx = make_work_context()
+        prompt = _build_prompt(ctx)
+        assert '"user_timezone": "IST"' in prompt
+
+    def test_user_timezone_never_uses_start_timezone_field(self, monkeypatch):
+        """user_timezone comes from the OS, not from calendar event start_timezone."""
+        import app.bob.cli_service as _module
+        monkeypatch.setattr(_module, "_local_timezone_name", lambda: "PST")
+
+        # Provide a calendar event whose start_timezone says something different.
+        from app.connectors.models import ConnectorResult
+        result = ConnectorResult.success(
+            source="outlook",
+            data={
+                "calendar_events": [
+                    {
+                        "id": "e1",
+                        "subject": "Stand-up",
+                        "start": "2026-07-21T16:00:00.000Z",
+                        "end": "2026-07-21T16:30:00.000Z",
+                        "start_timezone": "India Standard Time",  # should be ignored
+                    }
+                ],
+                "emails": [],
+                "user": None,
+            },
+        )
+        from app.context_builder.models import WorkContext
+        ctx = WorkContext.from_connector_results(
+            user_id="u1", results=[result]
+        )
+        prompt = _build_prompt(ctx)
+        # OS timezone (PST) must appear, not the event's start_timezone
+        assert '"user_timezone": "PST"' in prompt
+        assert "India Standard Time" not in prompt.split('"user_timezone"')[1][:50]
+
+    def test_prompt_contains_utc_conversion_instruction(self, monkeypatch):
+        """Prompt tells Bob to convert UTC times to user_timezone before displaying."""
+        import app.bob.cli_service as _module
+        monkeypatch.setattr(_module, "_local_timezone_name", lambda: "IST")
+        ctx = make_work_context()
+        prompt = _build_prompt(ctx)
+        assert "convert it from UTC" in prompt
+        assert "user's local timezone" in prompt

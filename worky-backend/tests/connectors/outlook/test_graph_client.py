@@ -22,8 +22,8 @@ Coverage:
   • Network error         — retries then succeeds; exhausted raises GraphServiceError
   • Timeout               — retries then succeeds; exhausted raises GraphServiceError
   • Authorization header  — Bearer token present on every request
-  • _extract_error_message — Graph error body, no-error-key fallback, non-JSON body,
-                             empty message string falls back to response text
+  • _extract_error_detail — Graph error body (code+message), no-error-key fallback,
+                            non-JSON body, empty message string falls back to response text
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from app.connectors.outlook.graph_client import (
     GraphAuthError,
     GraphRateLimitError,
     GraphServiceError,
-    _extract_error_message,
+    _extract_error_detail,
 )
 
 # ---------------------------------------------------------------------------
@@ -286,15 +286,18 @@ class TestGetMessages:
         assert "filter" in url_str.lower()
 
     @respx.mock
-    async def test_select_orderby_top_params_are_sent(self):
+    async def test_select_and_top_params_are_sent(self):
+        """$orderby is intentionally absent — incompatible with $filter on MSA mailboxes."""
         route = respx.get(f"{GRAPH_BASE_URL}/me/messages").mock(
             return_value=Response(200, json=MESSAGES_RESPONSE)
         )
         await make_client().get_messages()
         url_str = str(route.calls.last.request.url)
         assert "select" in url_str.lower()
-        assert "orderby" in url_str.lower()
         assert "top" in url_str.lower()
+        # $orderby must NOT be present — combining $filter + $orderby on
+        # /me/messages fails for personal Outlook.com (MSA) accounts.
+        assert "orderby" not in url_str.lower()
 
     @respx.mock
     async def test_401_raises_graph_auth_error(self):
@@ -572,40 +575,39 @@ class TestTimeoutRetry:
 
 
 # ---------------------------------------------------------------------------
-# _extract_error_message tests
+# _extract_error_detail tests
 # ---------------------------------------------------------------------------
 
-class TestExtractErrorMessage:
+class TestExtractErrorDetail:
 
-    def test_extracts_message_from_graph_error_body(self):
+    def test_returns_code_and_message_when_both_present(self):
+        """Returns "<code>: <message>" when both fields are present."""
         response = Response(401, json=GRAPH_ERROR_BODY)
-        result = _extract_error_message(response)
-        assert result == "Access token has expired or is yet to be valid."
+        result = _extract_error_detail(response)
+        assert result == "InvalidAuthenticationToken: Access token has expired or is yet to be valid."
 
-    def test_falls_back_to_text_when_no_message_key(self):
+    def test_returns_code_only_when_message_absent(self):
+        """Returns just the code when message is absent."""
         response = Response(500, json={"error": {"code": "InternalServerError"}})
-        result = _extract_error_message(response)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        result = _extract_error_detail(response)
+        assert result == "InternalServerError"
 
     def test_falls_back_to_text_when_body_is_not_json(self):
         response = Response(503, text="Service Unavailable")
-        result = _extract_error_message(response)
+        result = _extract_error_detail(response)
         assert "Service Unavailable" in result
 
     def test_falls_back_to_text_when_no_error_key(self):
         response = Response(400, json={"someOtherKey": "value"})
-        result = _extract_error_message(response)
+        result = _extract_error_detail(response)
         assert isinstance(result, str)
 
     def test_falls_back_to_text_when_message_is_empty_string(self):
-        """Empty string is falsy — should fall back to response text, not return ''."""
+        """Empty message with present code returns just the code."""
         response = Response(500, json={"error": {"code": "InternalError", "message": ""}})
-        result = _extract_error_message(response)
-        # The empty message triggers the `or` fallback; result must be non-empty text.
-        assert isinstance(result, str)
-        assert len(result) > 0
-        assert result != ""
+        result = _extract_error_detail(response)
+        # code is present but message is empty → returns just the code
+        assert result == "InternalError"
 
 
 # ---------------------------------------------------------------------------

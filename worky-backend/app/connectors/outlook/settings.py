@@ -10,8 +10,8 @@ from becoming a god-object as new connectors are added.
 
 WHAT THIS MODULE DOES
 ---------------------
-  • Reads OUTLOOK_CLIENT_ID, OUTLOOK_TENANT_ID, OUTLOOK_REDIRECT_URI from
-    the environment (or .env file).
+  • Reads OUTLOOK_CLIENT_ID, OUTLOOK_TENANT_ID, OUTLOOK_REDIRECT_URI,
+    and OUTLOOK_CLIENT_SECRET from the environment (or .env file).
   • Exposes computed URL properties (authority_url, authorize_url, token_url).
   • Exposes the OAuth scopes required by this connector.
 
@@ -31,9 +31,25 @@ This module may only import from:
 It must NOT import from app.config.settings or any other app module.
 """
 
+import logging
+import re
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
+
+# A bare UUID4 pattern (32 hex digits with hyphens).  When OUTLOOK_TENANT_ID
+# is set to a specific Azure AD tenant GUID, personal Microsoft Accounts
+# (MSA, e.g. Gmail/Hotmail addresses used as MS accounts) will authenticate
+# successfully but receive access tokens that Microsoft Graph rejects with
+# HTTP 401 because the token's "tid" claim (9188040d-…) does not match the
+# registered app tenant.
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 class OutlookSettings(BaseSettings):
@@ -41,11 +57,13 @@ class OutlookSettings(BaseSettings):
     Outlook / Azure AD configuration loaded from environment variables.
 
     Required variables (must be set in .env or environment):
-      OUTLOOK_CLIENT_ID  — Azure app registration client ID
-      OUTLOOK_TENANT_ID  — Azure AD directory (tenant) ID
+      OUTLOOK_CLIENT_ID      — Azure app registration client ID
+      OUTLOOK_TENANT_ID      — Azure AD directory (tenant) ID
+      OUTLOOK_CLIENT_SECRET  — Azure app registration client secret
+                               (required for confidential-client token exchange)
 
     Optional variables (have sensible defaults):
-      OUTLOOK_REDIRECT_URI — must match the redirect URI registered in Azure
+      OUTLOOK_REDIRECT_URI   — must match the redirect URI registered in Azure
     """
 
     # ------------------------------------------------------------------
@@ -54,6 +72,50 @@ class OutlookSettings(BaseSettings):
     outlook_client_id: str
     outlook_tenant_id: str
     outlook_redirect_uri: str = "http://localhost:8000/api/v1/auth/callback"
+
+    # Client secret for confidential-client OAuth 2.0 token requests.
+    # Azure AD requires either client_secret or client_assertion in every
+    # token request for app registrations with a "Web" redirect URI type.
+    # Set via OUTLOOK_CLIENT_SECRET in .env.
+    outlook_client_secret: str = ""
+
+    @model_validator(mode="after")
+    def _require_client_secret(self) -> "OutlookSettings":
+        """
+        Fail at startup with a clear message when the client secret is absent.
+
+        Without this guard, the missing secret produces an opaque
+        AADSTS7000218 error from Microsoft's token endpoint only after
+        the user completes the login redirect — far harder to diagnose.
+        """
+        if not self.outlook_client_secret:
+            raise ValueError(
+                "OUTLOOK_CLIENT_SECRET is not set. "
+                "Add it to your .env file. "
+                "Find it in Azure Portal → App registrations → "
+                "your app → Certificates & secrets → Client secrets."
+            )
+
+        # Warn when a specific Azure AD tenant GUID is used.
+        # Personal Microsoft Accounts (MSA) authenticate successfully at
+        # tenant-specific endpoints but receive access tokens with
+        # tid=9188040d-6c67-4c5b-b112-36a304b66dad (the MSA pseudo-tenant).
+        # Microsoft Graph rejects those tokens with HTTP 401 because the
+        # app was registered in a different tenant.
+        # Fix: set OUTLOOK_TENANT_ID=consumers (personal only) or
+        # OUTLOOK_TENANT_ID=common (personal + work/school) in .env.
+        if _UUID_RE.match(self.outlook_tenant_id):
+            _log.warning(
+                "OutlookSettings: OUTLOOK_TENANT_ID is a specific Azure AD "
+                "tenant GUID (%s).  Personal Microsoft Accounts (MSA) will "
+                "receive access tokens that Microsoft Graph rejects with "
+                "HTTP 401.  If you are using a personal account "
+                "(Outlook.com / Hotmail / Gmail-based MSA), change "
+                "OUTLOOK_TENANT_ID to 'consumers' or 'common' in your .env.",
+                self.outlook_tenant_id,
+            )
+
+        return self
 
     # ------------------------------------------------------------------
     # Microsoft Identity Platform URLs
@@ -92,16 +154,29 @@ class OutlookSettings(BaseSettings):
         Delegated permission scopes requested during the OAuth flow.
 
         Scope breakdown:
-          User.Read       — read the signed-in user's profile (/me)
+          openid          — required for OpenID Connect; Microsoft returns an
+                            id_token in the token response only when this scope
+                            is present (OIDC core)
+          profile         — includes name, oid, and preferred_username claims
+                            in the id_token
+          email           — includes email claim in the id_token
+          User.Read       — read the signed-in user's profile via Graph /me
+                            (also serves as the Graph API identity fallback)
           Calendars.Read  — read calendar events (used from Phase 4 onward)
           Mail.Read       — read email messages (used from Phase 5 onward)
           offline_access  — receive a refresh_token for silent token renewal
 
-        All four are requested at login time so the user only needs to
+        All scopes are requested at login time so the user only needs to
         consent once.  Scopes for future phases are included now to avoid
         a second consent prompt when those phases ship.
+
+        The three OIDC scopes (openid, profile, email) are placed first so
+        that Microsoft's scope validation sees them before the Graph scopes.
         """
         return [
+            "openid",
+            "profile",
+            "email",
             "User.Read",
             "Calendars.Read",
             "Mail.Read",

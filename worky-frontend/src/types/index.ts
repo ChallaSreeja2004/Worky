@@ -105,10 +105,12 @@ export interface OutlookData {
 export interface CalendarEvent {
   id: string
   subject: string
-  /** ISO 8601 start datetime string. */
+  /** ISO 8601 UTC datetime string (Z-terminated). */
   start: string
-  /** ISO 8601 end datetime string. */
+  /** ISO 8601 UTC datetime string (Z-terminated). */
   end: string
+  /** Calendar timezone name from Graph (e.g. "India Standard Time" or "UTC"). */
+  start_timezone: string
   location: string
   organizer_name: string
   organizer_email: string
